@@ -55,14 +55,16 @@ async def upload_zip(file: UploadFile = File(...)):
 
             # Process each Excel file
             for excel_file in excel_files:
+                # Read Excel and convert to CSV
                 with z.open(excel_file) as excel_fp:
-                    # Read Excel and convert to CSV
+                    print(f"Converting {excel_file} to CSV...")
                     df = pd.read_excel(BytesIO(excel_fp.read()))
                     base_name = os.path.splitext(os.path.basename(excel_file))[0]
                     csv_path = os.path.join(CSV_OUTPUT_DIR, f"{base_name}.csv")
                     df.to_csv(csv_path, index=False)
                     saved_files.append(csv_path)
 
+                    # Upload CSV to GCS
                     try:
                         # Debug: Print credentials info
                         client = storage.Client()
@@ -72,7 +74,7 @@ async def upload_zip(file: UploadFile = File(...)):
                         bucket = client.bucket("featurebox-ai-uploads")
                         print(f"Trying to upload to bucket: {bucket.name}")
                         
-                        # Upload to GCS in 'converted_csvs' folder
+                        # Upload with a subfolder structure
                         gcs_path = f"converted_csvs/{base_name}.csv"
                         blob = bucket.blob(gcs_path)
                         blob.upload_from_filename(csv_path)
@@ -83,25 +85,33 @@ async def upload_zip(file: UploadFile = File(...)):
                         print(f"Upload error details: {str(e)}")
                         raise HTTPException(status_code=500, detail=f"GCS Upload failed: {str(e)}")
 
-            return JSONResponse(content={
-                "status": "success",
-                "filename": file.filename,
-                "total_files_in_zip": len(file_list),
-                "excel_files_converted": len(saved_files),
-                "csv_files_saved": saved_files,
-                "csv_files_gcs": gcs_uris,
-                "message": f"Converted {len(saved_files)} Excel files to CSV and uploaded to GCS."
-            })
+        return JSONResponse(content={
+            "status": "success",
+            "filename": file.filename,
+            "total_files_in_zip": len(file_list),
+            "excel_files_converted": len(saved_files),
+            "csv_files_saved": saved_files,
+            "csv_files_gcs": gcs_uris,
+            "message": f"Converted {len(saved_files)} Excel files to CSV and uploaded to GCS."
+        })
 
     except BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid or corrupt ZIP file.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
     finally:
-        # Clean up
+        # Clean up temporary files
         if os.path.exists(tmpdir):
             try:
                 import shutil
                 shutil.rmtree(tmpdir)
+            except Exception:
+                pass
+        
+        # Clean up CSV files after upload
+        for csv_file in saved_files:
+            try:
+                if os.path.exists(csv_file):
+                    os.remove(csv_file)
             except Exception:
                 pass
