@@ -203,7 +203,7 @@ def generate_forecasts(forecast_file):
     df_metrics = err_df.reset_index()
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        df_forecast.pivot(index="Date", columns="SKU", values="Forecast").to_excel(writer, sheet_name="Forecasts")
+        df_forecast.pivot(index="SKU", columns="Date", values="Forecast").to_excel(writer, sheet_name="Forecasts")
         df_metrics.to_excel(writer, sheet_name="Metrics", index=False)
 
     return {
