@@ -1,22 +1,49 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi.responses import JSONResponse, FileResponse
 from zipfile import ZipFile, BadZipFile
 import os
 import tempfile
 from google.cloud import storage
 import pandas as pd
-from io import BytesIO
+import numpy as np
+from datetime import datetime
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from sklearn.metrics import mean_absolute_percentage_error
+from typing import Dict, List
+import traceback  # ### TRACEBACK LOGGING
 
 # Set Google Cloud credentials using relative path
 current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 credentials_path = os.path.join(current_dir, "service_account_key.json")
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
 
+# Configuration constants
+ITEM_COL_F = "Item"
+SEASONAL_P = 12
+HIST_END = pd.Timestamp("2025-05-01")
+FORECAST_START = pd.Timestamp("2025-06-01")
+OUTPUT_DIR = "forecast_outputs"
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
 app = FastAPI()
 
-# Create directory for temporary CSV files
-CSV_OUTPUT_DIR = "converted_csvs"
-os.makedirs(CSV_OUTPUT_DIR, exist_ok=True)
+# Import forecast logic
+from app.forecasting import generate_forecasts
+
+def upload_to_gcs(file_path: str) -> None:
+    try:
+        client = storage.Client()
+        print(f"Using project: {client.project}")
+        print(f"Authenticated as: {client._credentials.service_account_email}")
+        bucket = client.bucket("featurebox-ai-uploads")
+        blob_name = os.path.basename(file_path)
+        blob = bucket.blob(blob_name)
+        blob.upload_from_filename(file_path)
+        print(f"Successfully uploaded {blob_name} to GCS")
+    except Exception as e:
+        print(f"Upload error: {str(e)}")  # ### TRACEBACK LOGGING
+        raise HTTPException(status_code=500, detail=f"GCS Upload failed: {str(e)}")
 
 @app.get("/")
 async def root():
@@ -24,94 +51,108 @@ async def root():
 
 @app.post("/upload/")
 async def upload_zip(file: UploadFile = File(...)):
-    if not file.filename.endswith(".zip"):
-        raise HTTPException(status_code=400, detail="Only ZIP files are allowed.")
-
-    # Create temporary directory for zip extraction
-    tmpdir = tempfile.mkdtemp(prefix="zip_extract_")
-    zip_path = os.path.join(tmpdir, file.filename)
-
     try:
-        # Save uploaded ZIP file to disk
-        file.file.seek(0)
-        with open(zip_path, "wb") as buffer:
-            while chunk := file.file.read(1024 * 1024):
-                buffer.write(chunk)
+        # === DEBUG LOG ===
+        print(f"📦 Received 'file' of type: {type(file)}")
+        if hasattr(file, "filename"):
+            print(f"📂 Filename: {file.filename}")
+        else:
+            print(f"⚠️ 'file' does not have a filename attribute")
 
-        # Extract and validate ZIP
-        with ZipFile(zip_path) as z:
-            if z.testzip() is not None:
-                raise HTTPException(status_code=400, detail="Corrupt ZIP file detected.")
-            
-            # Get list of Excel files (excluding macOS hidden files)
-            file_list = [f for f in z.namelist() if not (f.startswith("__MACOSX/") or f.endswith(".DS_Store"))]
-            excel_files = [f for f in file_list if f.lower().endswith((".xlsx", ".xls"))]
+        if not file:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "detail": [{
+                        "type": "value_error",
+                        "loc": ["body", "file"],
+                        "msg": "Expected UploadFile, got str",
+                        "input": "string",
+                        "ctx": {"error": {}}
+                    }]
+                }
+            )
 
-            if not excel_files:
-                raise HTTPException(status_code=400, detail="No Excel files found in ZIP.")
+        if not file.filename.endswith(".zip"):
+            raise HTTPException(status_code=400, detail="Only ZIP files are allowed.")
 
-            saved_files = []
-            gcs_uris = []
+        tmpdir = tempfile.mkdtemp(prefix="zip_extract_")
+        zip_path = os.path.join(tmpdir, file.filename)
 
-            # Process each Excel file
-            for excel_file in excel_files:
-                # Read Excel and convert to CSV
-                with z.open(excel_file) as excel_fp:
-                    print(f"Converting {excel_file} to CSV...")
-                    df = pd.read_excel(BytesIO(excel_fp.read()))
-                    base_name = os.path.splitext(os.path.basename(excel_file))[0]
-                    csv_path = os.path.join(CSV_OUTPUT_DIR, f"{base_name}.csv")
-                    df.to_csv(csv_path, index=False)
-                    saved_files.append(csv_path)
+        try:
+            file.file.seek(0)
+            with open(zip_path, "wb") as buffer:
+                while chunk := file.file.read(1024 * 1024):
+                    buffer.write(chunk)
 
-                    # Upload CSV to GCS
-                    try:
-                        # Debug: Print credentials info
-                        client = storage.Client()
-                        print(f"Using project: {client.project}")
-                        print(f"Authenticated as: {client._credentials.service_account_email}")
-                        
-                        bucket = client.bucket("featurebox-ai-uploads")
-                        print(f"Trying to upload to bucket: {bucket.name}")
-                        
-                        # Upload with a subfolder structure
-                        gcs_path = f"converted_csvs/{base_name}.csv"
-                        blob = bucket.blob(gcs_path)
-                        blob.upload_from_filename(csv_path)
-                        gcs_uri = f"gs://featurebox-ai-uploads/{gcs_path}"
-                        gcs_uris.append(gcs_uri)
-                        print(f"Successfully uploaded {gcs_path} to GCS bucket")
-                    except Exception as e:
-                        print(f"Upload error details: {str(e)}")
-                        raise HTTPException(status_code=500, detail=f"GCS Upload failed: {str(e)}")
+            with ZipFile(zip_path) as z:
+                if z.testzip() is not None:
+                    raise HTTPException(status_code=400, detail="Corrupt ZIP file detected.")
+                z.extractall(tmpdir)
 
-        return JSONResponse(content={
-            "status": "success",
-            "filename": file.filename,
-            "total_files_in_zip": len(file_list),
-            "excel_files_converted": len(saved_files),
-            "csv_files_saved": saved_files,
-            "csv_files_gcs": gcs_uris,
-            "message": f"Converted {len(saved_files)} Excel files to CSV and uploaded to GCS."
-        })
+            extracted_files = [
+                os.path.join(root, f)
+                for root, _, files in os.walk(tmpdir)
+                for f in files
+                if f.endswith(".xlsx") and "__MACOSX" not in root
+            ]
 
-    except BadZipFile:
-        raise HTTPException(status_code=400, detail="Invalid or corrupt ZIP file.")
+            if not extracted_files:
+                raise HTTPException(status_code=400, detail="No Excel (.xlsx) files found in ZIP.")
+
+            uploaded_files = []
+            forecast_file = None
+
+            for excel_file in extracted_files:
+                print(f"🔍 Checking file: {os.path.basename(excel_file)}")
+                upload_to_gcs(excel_file)
+                uploaded_files.append(os.path.basename(excel_file))
+                if os.path.basename(excel_file).lower() == "sprouts_data.xlsx":
+                    forecast_file = excel_file
+
+            if not forecast_file:
+                return JSONResponse(content={
+                    "status": "success",
+                    "message": "Files uploaded but sprouts_data.xlsx not found",
+                    "uploaded_files": uploaded_files
+                })
+
+            result = generate_forecasts(forecast_file)
+
+            if result['status'] == 'error':
+                raise HTTPException(status_code=500, detail=result['message'])
+
+            return FileResponse(
+                path=result['forecast_file'],
+                filename=os.path.basename(result['forecast_file']),
+                media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+
+        except BadZipFile:
+            raise HTTPException(status_code=400, detail="Invalid or corrupt ZIP file.")
+        except Exception as e:
+            print("❌ Exception during ZIP processing:\n", traceback.format_exc())  # ### TRACEBACK LOGGING
+            raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+
+        finally:
+            if os.path.exists(tmpdir):
+                try:
+                    import shutil
+                    shutil.rmtree(tmpdir)
+                except Exception:
+                    pass
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
-    finally:
-        # Clean up temporary files
-        if os.path.exists(tmpdir):
-            try:
-                import shutil
-                shutil.rmtree(tmpdir)
-            except Exception:
-                pass
-        
-        # Clean up CSV files after upload
-        for csv_file in saved_files:
-            try:
-                if os.path.exists(csv_file):
-                    os.remove(csv_file)
-            except Exception:
-                pass
+        print("❌ Outer exception:\n", traceback.format_exc())  # ### TRACEBACK LOGGING
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": [{
+                    "type": "value_error",
+                    "loc": ["body", "file"],
+                    "msg": "Expected UploadFile, got str",
+                    "input": "string",
+                    "ctx": {"error": {}}
+                }]
+            }
+        )
