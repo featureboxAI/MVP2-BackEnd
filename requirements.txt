@@ -1,7 +1,9 @@
 fastapi==0.115.12
+python-multipart==0.0.6
 numpy==2.2.6
 pandas==2.2.3
 protobuf==6.31.1
 scikit_learn==1.6.1
 statsmodels==0.14.4
 uvicorn==0.22.0
+google-cloud-storage==2.14.0

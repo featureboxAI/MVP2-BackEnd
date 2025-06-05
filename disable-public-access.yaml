@@ -1,0 +1,6 @@
+constraint: constraints/iam.disablePolicyBindingForAllUsers
+booleanPolicy:
+  enforced: false
+
+
+

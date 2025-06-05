@@ -49,6 +49,7 @@ def upload_to_gcs(file_path: str) -> None:
 async def root():
     return {"message": "FastAPI backend is running!"}
 
+    
 @app.post("/upload/")
 async def upload_zip(file: UploadFile = File(...)):
     try:
