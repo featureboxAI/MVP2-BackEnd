@@ -11,6 +11,8 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from sklearn.metrics import mean_absolute_percentage_error
 from typing import Dict, List
 import traceback  # ### TRACEBACK LOGGING
+from pathlib import Path
+
 
 # Set Google Cloud credentials using relative path
 current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -22,9 +24,9 @@ ITEM_COL_F = "Item"
 SEASONAL_P = 12
 HIST_END = pd.Timestamp("2025-05-01")
 FORECAST_START = pd.Timestamp("2025-06-01")
-OUTPUT_DIR = "forecast_outputs"
+# OUTPUT_DIR = "forecast_outputs"
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+# os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 app = FastAPI()
 
@@ -54,25 +56,25 @@ async def root():
 async def upload_zip(file: UploadFile = File(...)):
     try:
         # === DEBUG LOG ===
-        print(f"📦 Received 'file' of type: {type(file)}")
+        print(f" Received 'file' of type: {type(file)}")
         if hasattr(file, "filename"):
-            print(f"📂 Filename: {file.filename}")
+            print(f" Filename: {file.filename}")
         else:
-            print(f"⚠️ 'file' does not have a filename attribute")
+            print(f" 'file' does not have a filename attribute")
 
-        if not file:
-            return JSONResponse(
-                status_code=422,
-                content={
-                    "detail": [{
-                        "type": "value_error",
-                        "loc": ["body", "file"],
-                        "msg": "Expected UploadFile, got str",
-                        "input": "string",
-                        "ctx": {"error": {}}
-                    }]
-                }
-            )
+        # if not file:
+        #     return JSONResponse(
+        #         status_code=422,
+        #         content={
+        #             "detail": [{
+        #                 "type": "value_error",
+        #                 "loc": ["body", "file"],
+        #                 "msg": "Expected UploadFile, got str",
+        #                 "input": "string",
+        #                 "ctx": {"error": {}}
+        #             }]
+        #         }
+        #     )
 
         if not file.filename.endswith(".zip"):
             raise HTTPException(status_code=400, detail="Only ZIP files are allowed.")
@@ -132,7 +134,7 @@ async def upload_zip(file: UploadFile = File(...)):
         except BadZipFile:
             raise HTTPException(status_code=400, detail="Invalid or corrupt ZIP file.")
         except Exception as e:
-            print("❌ Exception during ZIP processing:\n", traceback.format_exc())  # ### TRACEBACK LOGGING
+            print(" Exception during ZIP processing:\n", traceback.format_exc())  # ### TRACEBACK LOGGING
             raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
         finally:
@@ -144,7 +146,7 @@ async def upload_zip(file: UploadFile = File(...)):
                     pass
 
     except Exception as e:
-        print("❌ Outer exception:\n", traceback.format_exc())  # ### TRACEBACK LOGGING
+        print(" Outer exception:\n", traceback.format_exc())  # ### TRACEBACK LOGGING
         return JSONResponse(
             status_code=422,
             content={
