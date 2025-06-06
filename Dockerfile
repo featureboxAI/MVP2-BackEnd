@@ -14,6 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy entire application code into container
 COPY . .
+RUN chmod +x entrypoint.sh
+
 
 ENV PYTHONPATH=/app
 

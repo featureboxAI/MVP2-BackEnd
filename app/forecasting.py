@@ -51,7 +51,7 @@ def generate_forecasts(forecast_file):
     month_cols = sorted([col for col in df.columns if isinstance(col, pd.Timestamp)])
     hist_cols = [col for col in month_cols if col <= HIST_END]
     fcast_cols = [col for col in month_cols if FORECAST_START <= col <= FORECAST_START + pd.DateOffset(months=4)]
-    print("\n📅 Forecast months:", fcast_cols)
+    print("\n Forecast months:", fcast_cols)
     if not hist_cols or not fcast_cols:
         return {
             "status": "error",
@@ -69,7 +69,7 @@ def generate_forecasts(forecast_file):
     results = []
     pred_fcasts = {}
     for sku in df[ITEM_COL]:
-        # print(f"\n🔄 Checking SKU: {sku}")
+        # print(f"\n Checking SKU: {sku}")
         if sku not in hist_df.columns:
             print(f" {sku} not found in hist_df.columns")
             continue
@@ -169,22 +169,3 @@ def generate_forecasts(forecast_file):
 
 
 
-
-
-    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # output_path = f"forecast_outputs/forecasts_{timestamp}.xlsx"
-    # forecast_data = []
-    # dates = pd.date_range(FORECAST_START, periods=5, freq='MS')
-    # for sku, values in pred_fcasts.items():
-    #     for date, val in zip(dates, values):
-    #         forecast_data.append({"SKU": sku, "Date": date, "Forecast": val})
-    # df_forecast = pd.DataFrame(forecast_data)
-    # df_metrics = err_df.reset_index()
-    # with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-    #     df_forecast.pivot(index="SKU", columns="Date", values="Forecast").to_excel(writer, sheet_name="Forecasts")
-    #     df_metrics.to_excel(writer, sheet_name="Metrics", index=False)
-    # return {
-    #     "status": "success",
-    #     "forecast_file": output_path,
-    #     "message": f"Forecasts generated for {len(pred_fcasts)} SKUs"
-    # }

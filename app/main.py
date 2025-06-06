@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, Request, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse, FileResponse
 from zipfile import ZipFile, BadZipFile
 import os
@@ -10,8 +10,8 @@ from datetime import datetime
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from sklearn.metrics import mean_absolute_percentage_error
 from typing import Dict, List
-import traceback  # ### TRACEBACK LOGGING
-from pathlib import Path
+import traceback   ## TRACEBACK LOGGING
+
 
 
 # Set Google Cloud credentials using relative path
@@ -51,31 +51,11 @@ def upload_to_gcs(file_path: str) -> None:
 async def root():
     return {"message": "FastAPI backend is running!"}
 
-    
+
 @app.post("/upload/")
 async def upload_zip(file: UploadFile = File(...)):
+    print(" Received type:", type(file))
     try:
-        # === DEBUG LOG ===
-        print(f" Received 'file' of type: {type(file)}")
-        if hasattr(file, "filename"):
-            print(f" Filename: {file.filename}")
-        else:
-            print(f" 'file' does not have a filename attribute")
-
-        # if not file:
-        #     return JSONResponse(
-        #         status_code=422,
-        #         content={
-        #             "detail": [{
-        #                 "type": "value_error",
-        #                 "loc": ["body", "file"],
-        #                 "msg": "Expected UploadFile, got str",
-        #                 "input": "string",
-        #                 "ctx": {"error": {}}
-        #             }]
-        #         }
-        #     )
-
         if not file.filename.endswith(".zip"):
             raise HTTPException(status_code=400, detail="Only ZIP files are allowed.")
 
