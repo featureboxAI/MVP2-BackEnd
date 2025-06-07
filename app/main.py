@@ -38,10 +38,18 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=False,          # True only if using cookies or Authorization headers
-    allow_methods=["*"],              # Allow all methods: GET, POST, etc.
-    allow_headers=["*"],              # Allow all request headers (e.g., Content-Type)
+    allow_origin_regex=(
+        r"(https:\/\/.*\.lovable\.(app|com))"   # any Lovable preview
+        r"|^https:\/\/[a-zA-Z0-9\-]+\.lovableproject\.com$"
+        r"|(^http:\/\/localhost(:\d+)?$)"       # localhost with optional :port
+        r"|(^http:\/\/127\.0\.0\.1(:\d+)?$)"    # 127.0.0.1 with optional :port
+    ),
+    # Will match:
+    #   https://preview--featurebox-ai-ui-mvp-2-03.lovable.app
+    #   https://45006fa9-....lovableproject.com
+    allow_credentials=False,   # keep False with a wildcard / regex
+    allow_methods=["*"],    # or ["*"] if you’ll add GET etc.
+    allow_headers=["*"],
 )
 
 # Import forecast logic
