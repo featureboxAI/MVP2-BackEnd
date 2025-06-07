@@ -11,6 +11,7 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from sklearn.metrics import mean_absolute_percentage_error
 from typing import Dict, List
 import traceback   ## TRACEBACK LOGGING
+from fastapi.middleware.cors import CORSMiddleware
 
 
 
@@ -29,6 +30,19 @@ FORECAST_START = pd.Timestamp("2025-06-01")
 # os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 app = FastAPI()
+
+origins = [
+    "https://45006fa9-15b6-4438-a9a4-94de64110d9d.lovableproject.com",
+    "http://localhost:3000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=False,          # True only if using cookies or Authorization headers
+    allow_methods=["*"],              # Allow all methods: GET, POST, etc.
+    allow_headers=["*"],              # Allow all request headers (e.g., Content-Type)
+)
 
 # Import forecast logic
 from app.forecasting import generate_forecasts
