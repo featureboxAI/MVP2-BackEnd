@@ -12,7 +12,7 @@ from sklearn.metrics import mean_absolute_percentage_error
 from typing import Dict, List
 import traceback   ## TRACEBACK LOGGING
 from fastapi.middleware.cors import CORSMiddleware
-
+from pydantic import BaseModel 
 
 
 # Set Google Cloud credentials using relative path
@@ -25,9 +25,7 @@ ITEM_COL_F = "Item"
 SEASONAL_P = 12
 HIST_END = pd.Timestamp("2025-05-01")
 FORECAST_START = pd.Timestamp("2025-06-01")
-# OUTPUT_DIR = "forecast_outputs"
 
-# os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 app = FastAPI()
 
@@ -161,3 +159,37 @@ async def upload_zip(file: UploadFile = File(...)):
                 }]
             }
         )
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+# Dummy users for now (can replace later with DB logic)
+DUMMY_USERS = {
+    "user1@customer1.com": {
+        "password": "pass123",
+        "tenant": "customer1",
+        "backend_url": "https://featurebox-ai-service-666676702816.us-west1.run.app"
+    },
+    "user2@customer2.com": {
+        "password": "pass456",
+        "tenant": "customer2",
+        "backend_url": "https://backend.customer2.com"
+    },
+}
+
+@app.post("/login")
+async def login_user(data: LoginRequest):
+    user = DUMMY_USERS.get(data.email)
+
+    if not user or user["password"] != data.password:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    # Fake token for now
+    return {
+        "status": "success",
+        "token": "fake.jwt.token.for." + data.email,
+        "tenant": user["tenant"],
+        "backend_url": user["backend_url"]
+    }
