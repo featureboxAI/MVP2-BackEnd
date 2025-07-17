@@ -37,3 +37,27 @@ def upload_to_gcs(file_path: str, bucket_name: str) -> str:
             status_code=500,
             detail=f"Failed to upload to GCS: {str(e)}"
         )
+
+# ─────────────────────────────────────────────────────────────
+# DOWNLOAD from GCS
+# ─────────────────────────────────────────────────────────────
+def download_blob(bucket_name: str, source_blob_name: str, destination_file_name: str):
+    """
+    Download a blob from GCS to a local file.
+
+    Args:
+        bucket_name: GCS bucket name
+        source_blob_name: Path to file in bucket (e.g. excel_uploads/myfile.xlsx)
+        destination_file_name: Where to save locally
+    """
+    try:
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(source_blob_name)
+
+        os.makedirs(os.path.dirname(destination_file_name), exist_ok=True)
+        blob.download_to_filename(destination_file_name)
+        print(f"✅ Downloaded {source_blob_name} to {destination_file_name}")
+    except Exception as e:
+        print(f"❌ GCS download error: {str(e)}")
+        raise
