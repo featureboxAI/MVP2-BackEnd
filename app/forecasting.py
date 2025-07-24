@@ -273,14 +273,7 @@ def run_non_exog_driver(series_dict):
             best = min(candidates, key=candidates.get)
         print(f"    ==> Best: {best} err={errs_nrmse[best]:.2f}%")
 
-        # record timing summary
-        # total_time = sum(model_timings.values()) 
-        # timing_row = {'sheet': sheet, 'item': item, 'total_time_s': total_time}  
-        # timing_row.update({f"{k}_s": v for k, v in model_timings.items()})  
-        # timing_summary.append(timing_row) 
-        # total_time = sum(model_timings.values())
-        # print(f" Total model time for {item}: {total_time:.2f}s") 
-
+        
         # prepare future index
         fut_idx = pd.date_range(ts.index[-1] + pd.offsets.MonthBegin(), periods=12, freq='MS')
 
@@ -376,17 +369,17 @@ def run_non_exog_driver(series_dict):
         }))
 
     # return pd.DataFrame(df_metrics), pd.concat(df_forecasts, ignore_index=True)
-    return pd.DataFrame(df_metrics), pd.concat(df_forecasts, ignore_index=True), pd.DataFrame(timing_summary)
+    return pd.DataFrame(df_metrics), pd.concat(df_forecasts, ignore_index=True),  None
     
 def run_exog_driver(series_dict):
     df_metrics, df_forecasts = [], []
-    timing_summary = []
+
     
     keys = list(series_dict.keys())
     sheets = sorted({s for s, _ in keys})
     total_sheets = len(sheets)
     sheet_to_items = {s: [i for (s2, i) in keys if s2 == s] for s in sheets}
-    model_timings = {}
+   
 
     for si, (sheet, item) in enumerate(keys, 1):
         ii = sheet_to_items[sheet].index(item) + 1
@@ -468,28 +461,31 @@ def run_exog_driver(series_dict):
             'model': best, 'ds': fc.index, 'forecast': fc.values
         }))
 
-    # record timing summary
-        total_time = sum(model_timings.values()) 
-        timing_row = {'sheet': sheet, 'item': item, 'total_time_s': total_time}  
-        timing_row.update({f"{k}_s": v for k, v in model_timings.items()})  
-        timing_summary.append(timing_row) 
-        total_time = sum(model_timings.values())
-        print(f" Total model time for {item}: {total_time:.2f}s")
+
     
-    return pd.DataFrame(df_metrics), pd.concat(df_forecasts, ignore_index=True), pd.DataFrame(timing_summary)
+    return pd.DataFrame(df_metrics), pd.concat(df_forecasts, ignore_index=True),None
 
 def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None):
 
     global df_core, non_exog_series, exog_series
 
+    print(f"[DEBUG] generate_forecasts() called with:")
+    print(f"        core_path = {filepath}")
+    print(f"        cons_path = {cons_path}")
+    print(f"        az_path   = {az_path}")
+
     # ─────────────────────────────────────────────
     # Load the uploaded Excel file 
     # ─────────────────────────────────────────────
+    print("[DEBUG] Loading core Excel file...")
     df_core = pd.read_excel(filepath, sheet_name=None)
+    print(f"[DEBUG] Loaded {len(df_core)} sheets from core Excel")
     
     df_cons = {}
     if cons_path:
+        print("[DEBUG] Loading consumption Excel file...")
         df_cons = pd.read_excel(cons_path, sheet_name=None)
+        print(f"[DEBUG] Loaded {len(df_cons)} sheets from consumption Excel")
 
     df_amaz = None
     if az_path:
@@ -504,14 +500,6 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
     # ─────────────────────────────────────────────
     # Build non_exog_series and exog_series
     # ─────────────────────────────────────────────
-    #=== Limited SKUs for testing ===
-    # def _limit_dict(orig_dict, n=5):
-    #     return dict(list(orig_dict.items())[:n])
-
-    # non_exog_series = _limit_dict(non_exog_series, n=5)
-
-    # exog_series = _limit_dict(exog_series, n=5)
-
     non_exog_series = {}
     exog_series = {}
 
@@ -544,9 +532,22 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
                 ts_cons = df_c.loc[item].dropna().asfreq('MS')
                 exog_series[(sheet_name, item)] = (ts_orig, ts_cons)
 
+    #=== Limited SKUs for testing ===
+    def _limit_dict(orig_dict, n=5):
+        return dict(list(orig_dict.items())[:n])
+
+    non_exog_series = _limit_dict(non_exog_series, n=5)
+
+    exog_series = _limit_dict(exog_series, n=5)
     # ─────────────────────────────────────────────
     # Run non-exog and exog forecast drivers
     # ─────────────────────────────────────────────
+    print(f"[DEBUG] Loaded {len(df_core)} core sheets")
+    print(f"[DEBUG] Prepared {len(non_exog_series)} non-exog series")
+    print(f"[DEBUG] Prepared {len(exog_series)} exog series")
+
+    
+    
     non_metrics, non_forecasts, _ = run_non_exog_driver(non_exog_series) 
     ex_metrics, ex_forecasts, _ = run_exog_driver(exog_series)
 

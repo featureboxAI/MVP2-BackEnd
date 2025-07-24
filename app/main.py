@@ -14,7 +14,11 @@ from sklearn.metrics import mean_absolute_percentage_error
 from typing import Dict, List
 import traceback   ## TRACEBACK LOGGING
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel 
+from fastapi.responses import FileResponse
+from datetime import timedelta
+from fastapi.responses import StreamingResponse
+import requests
+from io import BytesIO
 
 
 # Set Google Cloud credentials using relative path
@@ -23,6 +27,8 @@ credentials_path = os.path.join(current_dir, "service_account_key.json")
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
 
 app = FastAPI()
+
+latest_forecast = {}
 
 origins = [
     "https://lovable.dev/projects/0189a77d-15e6-4282-bb19-cb7fdc4d7803",
@@ -44,35 +50,75 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def generate_signed_url(bucket_name, blob_name, expiration_minutes=10):
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+    url = blob.generate_signed_url(
+        version="v4",
+        expiration=timedelta(minutes=expiration_minutes),
+        method="GET",
+    )
+    return url
 
-# Import forecast logic
-from .forecasting import generate_forecasts
-
-def upload_to_gcs(file_path: str) -> None:
+def upload_to_gcs(file_path: str, bucket_name = "featurebox-ai-uploads") -> str:
     try:
         client = storage.Client()
         print(f"Using project: {client.project}")
         print(f"Authenticated as: {client._credentials.service_account_email}")
         bucket = client.bucket("featurebox-ai-uploads")
-        blob_name = os.path.basename(file_path)
+        blob_name = f"excel_uploads/{os.path.basename(file_path)}"  # Upload inside subfolder
         blob = bucket.blob(blob_name)
         blob.upload_from_filename(file_path)
+
         print(f"Successfully uploaded {blob_name} to GCS")
+
+        return blob_name  
+
     except Exception as e:
         print(f"Upload error: {str(e)}")  # ### TRACEBACK LOGGING
         raise HTTPException(status_code=500, detail=f"GCS Upload failed: {str(e)}")
+    
 
 def trigger_forecast_on_vm(core_gcs, cons_gcs=None, az_gcs=None):
-    vm_url = "http://34.63.139.152:8000/run-forecast" 
+    if not core_gcs:
+        raise ValueError("core_gcs must be provided to trigger_forecast_on_vm")
+
+    vm_url = "http://104.198.140.245:8000/run-forecast" 
+    # vm_url = "http://127.0.0.1:8000/run-forecast"
+
+
+
     payload = {
         "core_path": core_gcs,
         "cons_path": cons_gcs,
         "az_path": az_gcs
     }
-    # Remove None values
     clean_payload = {k: v for k, v in payload.items() if v}
-    response = requests.post(vm_url, json=clean_payload)
-    return response.json()
+    
+    print("[DEBUG] Payload being sent to VM:", clean_payload)
+
+    # response = requests.post(vm_url, json=clean_payload)
+
+    try:
+        response = requests.post(vm_url, json=clean_payload, timeout=60)
+        # latest_forecast["gcs_path"] = response.get("forecast_gcs")
+        latest_forecast["gcs_path"] = response.json().get("forecast_gcs")  # NEW: store path from VM
+
+
+        print("[DEBUG] VM response status:", response.status_code)
+        print("[DEBUG] VM response text:", response.text)
+
+        # safer return block
+        try:
+            return response.json()
+        except Exception as json_err:
+            print("[ERROR] Could not parse JSON from VM:", json_err)
+            return {"status": "unknown", "raw": response.text}
+
+    except Exception as e:
+        print("[ERROR] VM call failed:", e)
+        raise HTTPException(status_code=500, detail=f"VM request failed: {str(e)}")
 
 
 @app.get("/")
@@ -83,7 +129,7 @@ async def root():
 @app.post("/upload/")
 async def upload_zip(file: UploadFile = File(...)):
     print(" [BACKEND] Received ZIP upload:", type(file))
-    
+
     try:
         if not file.filename.endswith(".zip"):
             raise HTTPException(status_code=400, detail="Only ZIP files are allowed.")
@@ -124,20 +170,16 @@ async def upload_zip(file: UploadFile = File(...)):
                 upload_to_gcs(excel_file)
                 uploaded_files.append(os.path.basename(excel_file))
                 
-                # File classification logic
-                if "amazon" in fname:
+                if "amazon" in fname or "az" in fname:
                     az_file = excel_file
                 elif any(kw in fname for kw in ["cons", "spins", "demand"]):
                     cons_file = excel_file
-                elif forecast_file is None:
-                    forecast_file = excel_file  # fallback to first remaining Excel file
+                elif forecast_file is None or any(kw in fname for kw in ["core", "allsku", "sprout"]):  # ✅ better fallback
+                    forecast_file = excel_file
 
             if not forecast_file:
-                return JSONResponse(content={
-                    "status": "success",
-                    "message": "Files uploaded but sprouts_data.xlsx not found",
-                    "uploaded_files": uploaded_files
-                })
+                raise HTTPException(status_code=400, detail="Could not identify forecast file (core/allsku/sprout) from uploaded ZIP.")
+
             
              # DEBUG: Print what we're sending to VM
             print(" [BACKEND] Triggering forecast on VM with:")
@@ -145,23 +187,40 @@ async def upload_zip(file: UploadFile = File(...)):
             print(" - Cons file:", cons_file)
             print(" - Amazon file:", az_file)
 
+            print(" [DEBUG] Selected forecast_file:", forecast_file)
+
             # Upload all to GCS
+            BUCKET_NAME = "featurebox-ai-uploads" 
             gcs_core = upload_to_gcs(forecast_file, "featurebox-ai-uploads")
+            print(" [DEBUG] Uploaded forecast file to GCS as:", gcs_core)
+
             gcs_cons = upload_to_gcs(cons_file, "featurebox-ai-uploads") if cons_file else None
             gcs_az   = upload_to_gcs(az_file, "featurebox-ai-uploads") if az_file else None
 
             # Call VM with JSON body of GCS paths
             vm_result = trigger_forecast_on_vm(gcs_core, gcs_cons, gcs_az)
+            print("[DEBUG] Result from VM:", vm_result)
+
+            print("[DEBUG] VM returned:", vm_result)
 
             # Log response
             print("[BACKEND] VM responded with:", vm_result)
 
+            #  Generate signed download URL from forecast_gcs if returned
+            if vm_result.get("status") == "success" and "forecast_gcs" in vm_result:
+                gcs_path = vm_result["forecast_gcs"]
+                blob_name = gcs_path.replace(f"gs://{BUCKET_NAME}/", "")  #  Extract blob path
+                signed_url = generate_signed_url(BUCKET_NAME, blob_name)  #  Get signed URL
+                vm_result["download_url"] = signed_url  #  Add it to response
+
+            #  Final response sent to frontend
             return JSONResponse(content={
                 "status": "success",
                 "message": vm_result.get("message"),
                 "metrics_shape": vm_result.get("metrics_shape"),
                 "forecast_shape": vm_result.get("forecast_shape"),
-                "raw_response": vm_result
+                "raw_response": vm_result,
+                "download_url": vm_result.get("download_url") 
             })
         
 
@@ -189,6 +248,73 @@ async def upload_zip(file: UploadFile = File(...)):
                     "msg": "Expected UploadFile, got str",
                     "input": "string",
                     "ctx": {"error": {}}
-                }]
+           }]
             }
         )
+
+
+@app.get("/download/")
+def download_forecast(path: str):
+    """Streams the file from GCS back to the frontend."""
+    try:
+        bucket_name = "featurebox-ai-uploads"
+        blob_path = path.replace(f"gs://{bucket_name}/", "")
+        
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(blob_path)
+        
+        file_stream = BytesIO()
+        blob.download_to_file(file_stream)
+        file_stream.seek(0)
+
+        return StreamingResponse(
+            file_stream,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=forecast_results.xlsx"}
+        )
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+
+
+
+
+
+
+    
+    # try:
+    #     print("Trying to connect to bucket:", RESULT_BUCKET)
+    #     client = storage.Client()
+    #     bucket = client.bucket(RESULT_BUCKET)
+
+    #     blobs = list(bucket.list_blobs(prefix=f"{RESULT_FOLDER}/"))
+    #     print("Found blobs:", [b.name for b in blobs])
+    #     xlsx_blobs = [b for b in blobs if b.name.endswith(".xlsx")]
+
+    #     if not xlsx_blobs:
+    #         return {"error": "No recent forecast result files found."}
+
+    #     # Sort by creation time to get the latest
+    #     latest_blob = sorted(xlsx_blobs, key=lambda b: b.time_created, reverse=True)[0]
+    #     print("Latest blob:", latest_blob.name)
+    #     print(f"[DEBUG] Downloading latest forecast result: {latest_blob.name}")
+
+    #     latest_blob.download_to_filename(LOCAL_RESULT_PATH)
+    #     print("Downloaded to:", LOCAL_RESULT_PATH)
+    #     print("File exists locally?", os.path.exists(LOCAL_RESULT_PATH))
+
+    #     print("Serving file:", LOCAL_RESULT_PATH)
+
+    #     return FileResponse(
+    #         path=LOCAL_RESULT_PATH,
+    #         filename=latest_blob.name.split("/")[-1],
+    #         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    #     )
+
+    # except Exception as e:
+    #     print("[ERROR]", str(e))
+    #     return {"error": str(e)}
+
+    

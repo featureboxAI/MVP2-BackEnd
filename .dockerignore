@@ -1,0 +1,20 @@
+# Python + venv
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+.Python
+.env
+forecasting.py
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS junk files
+.DS_Store
+
+# Git
+.git/
+.gitignore

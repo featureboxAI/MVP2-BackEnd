@@ -2,7 +2,8 @@ from google.cloud import storage
 from fastapi import HTTPException
 import os
 
-def upload_to_gcs(file_path: str, bucket_name: str) -> str:
+
+def upload_to_gcs(file_path: str, bucket_name: str = "featurebox-ai-uploads") -> str:
     """
     Upload a file to Google Cloud Storage
     
@@ -29,15 +30,10 @@ def upload_to_gcs(file_path: str, bucket_name: str) -> str:
         
         # Upload the file
         blob.upload_from_filename(file_path)
-        
-        return blob.public_url
-
+        return f"gs://{bucket_name}/{blob_name}"
+    
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to upload to GCS: {str(e)}"
-        )
-
+        raise HTTPException(status_code=500, detail=f"GCS Upload failed: {str(e)}")
 # ─────────────────────────────────────────────────────────────
 # DOWNLOAD from GCS
 # ─────────────────────────────────────────────────────────────
@@ -56,8 +52,11 @@ def download_blob(bucket_name: str, source_blob_name: str, destination_file_name
         blob = bucket.blob(source_blob_name)
 
         os.makedirs(os.path.dirname(destination_file_name), exist_ok=True)
+
         blob.download_to_filename(destination_file_name)
-        print(f"✅ Downloaded {source_blob_name} to {destination_file_name}")
+        print(f" Downloaded {source_blob_name} to {destination_file_name}")
+        return destination_file_name
+    
     except Exception as e:
-        print(f"❌ GCS download error: {str(e)}")
+        print(f" GCS download error: {str(e)}")
         raise
