@@ -31,7 +31,7 @@ app = FastAPI()
 latest_forecast = {}
 
 origins = [
-    "https://lovable.dev/projects/0189a77d-15e6-4282-bb19-cb7fdc4d7803",
+    "https://featurebox-ai-ui-mvp-2-05.lovable.app/",
     "http://localhost:3000",
 ]
 
