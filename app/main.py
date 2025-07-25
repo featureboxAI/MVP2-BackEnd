@@ -84,10 +84,8 @@ def trigger_forecast_on_vm(core_gcs, cons_gcs=None, az_gcs=None):
     if not core_gcs:
         raise ValueError("core_gcs must be provided to trigger_forecast_on_vm")
 
-    vm_url = "http://104.198.140.245:8000/run-forecast" 
-    # vm_url = "http://127.0.0.1:8000/run-forecast"
-
-
+    vm_url = "http://35.223.133.115:8000/run-forecast" 
+    # vm_url = "http://127.0.0.1:8002/run-forecast"
 
     payload = {
         "core_path": core_gcs,
@@ -128,6 +126,12 @@ async def root():
 
 @app.post("/upload/")
 async def upload_zip(file: UploadFile = File(...)):
+    print("Received type:", type(file))
+    print("Filename:", file.filename)
+    print("ContentType:", file.content_type)
+
+
+
     print(" [BACKEND] Received ZIP upload:", type(file))
 
     try:
@@ -237,84 +241,50 @@ async def upload_zip(file: UploadFile = File(...)):
                 except Exception:
                     pass
 
+
     except Exception as e:
-        print(" Outer exception:\n", traceback.format_exc())  # ### TRACEBACK LOGGING
-        return JSONResponse(
-            status_code=422,
-            content={
-                "detail": [{
-                    "type": "value_error",
-                    "loc": ["body", "file"],
-                    "msg": "Expected UploadFile, got str",
-                    "input": "string",
-                    "ctx": {"error": {}}
-           }]
-            }
-        )
-
-
-@app.get("/download/")
-def download_forecast(path: str):
-    """Streams the file from GCS back to the frontend."""
-    try:
-        bucket_name = "featurebox-ai-uploads"
-        blob_path = path.replace(f"gs://{bucket_name}/", "")
-        
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(bucket_name)
-        blob = bucket.blob(blob_path)
-        
-        file_stream = BytesIO()
-        blob.download_to_file(file_stream)
-        file_stream.seek(0)
-
-        return StreamingResponse(
-            file_stream,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f"attachment; filename=forecast_results.xlsx"}
-        )
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-
-
-
-
-
-
-    
-    # try:
-    #     print("Trying to connect to bucket:", RESULT_BUCKET)
-    #     client = storage.Client()
-    #     bucket = client.bucket(RESULT_BUCKET)
-
-    #     blobs = list(bucket.list_blobs(prefix=f"{RESULT_FOLDER}/"))
-    #     print("Found blobs:", [b.name for b in blobs])
-    #     xlsx_blobs = [b for b in blobs if b.name.endswith(".xlsx")]
-
-    #     if not xlsx_blobs:
-    #         return {"error": "No recent forecast result files found."}
-
-    #     # Sort by creation time to get the latest
-    #     latest_blob = sorted(xlsx_blobs, key=lambda b: b.time_created, reverse=True)[0]
-    #     print("Latest blob:", latest_blob.name)
-    #     print(f"[DEBUG] Downloading latest forecast result: {latest_blob.name}")
-
-    #     latest_blob.download_to_filename(LOCAL_RESULT_PATH)
-    #     print("Downloaded to:", LOCAL_RESULT_PATH)
-    #     print("File exists locally?", os.path.exists(LOCAL_RESULT_PATH))
-
-    #     print("Serving file:", LOCAL_RESULT_PATH)
-
-    #     return FileResponse(
-    #         path=LOCAL_RESULT_PATH,
-    #         filename=latest_blob.name.split("/")[-1],
-    #         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    #     )
+        print(" Outer exception:\n", traceback.format_exc()) 
+        raise HTTPException(status_code=500, detail=f"Unhandled error: {str(e)}")
 
     # except Exception as e:
-    #     print("[ERROR]", str(e))
-    #     return {"error": str(e)}
+    #     print(" Outer exception:\n", traceback.format_exc())  # ### TRACEBACK LOGGING
+    #     return JSONResponse(
+    #         status_code=422,
+    #         content={
+    #             "detail": [{
+    #                 "type": "value_error",
+    #                 "loc": ["body", "file"],
+    #                 "msg": "Expected UploadFile, got str",
+    #                 "input": "string",
+    #                 "ctx": {"error": {}}
+    #        }]
+    #         }
+    #     )
+
+
+# @app.get("/download/")
+# def download_forecast(path: str):
+#     """Streams the file from GCS back to the frontend."""
+#     try:
+#         bucket_name = "featurebox-ai-uploads"
+#         blob_path = path.replace(f"gs://{bucket_name}/", "")
+        
+#         storage_client = storage.Client()
+#         bucket = storage_client.bucket(bucket_name)
+#         blob = bucket.blob(blob_path)
+        
+#         file_stream = BytesIO()
+#         blob.download_to_file(file_stream)
+#         file_stream.seek(0)
+
+#         return StreamingResponse(
+#             file_stream,
+#             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+#             headers={"Content-Disposition": f"attachment; filename=forecast_results.xlsx"}
+#         )
+#     except Exception as e:
+#         return {"status": "error", "message": str(e)}
+
+
 
     
