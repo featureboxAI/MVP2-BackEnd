@@ -84,7 +84,7 @@ def trigger_forecast_on_vm(core_gcs, cons_gcs=None, az_gcs=None):
     if not core_gcs:
         raise ValueError("core_gcs must be provided to trigger_forecast_on_vm")
 
-    vm_url = "http://35.223.133.115:8000/run-forecast" 
+    vm_url = "http://34.135.50.176:8000/run-forecast" 
     # vm_url = "http://127.0.0.1:8002/run-forecast"
 
     payload = {
