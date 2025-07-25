@@ -22,9 +22,9 @@ from io import BytesIO
 
 
 # Set Google Cloud credentials using relative path
-current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-credentials_path = os.path.join(current_dir, "service_account_key.json")
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+# current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# credentials_path = os.path.join(current_dir, "service_account_key.json")
+# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
 
 app = FastAPI()
 
