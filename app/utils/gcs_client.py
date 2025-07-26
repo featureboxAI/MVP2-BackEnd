@@ -1,6 +1,13 @@
 from google.cloud import storage
 from fastapi import HTTPException
+from google.auth import default 
 import os
+
+#  Get default credentials and project from Cloud Run environment
+credentials, project_id = default()  # token-based credentials
+
+# Initialize storage client with explicit credentials
+storage_client = storage.Client(credentials=credentials, project=project_id)  
 
 
 def upload_to_gcs(file_path: str, bucket_name: str = "featurebox-ai-uploads") -> str:
@@ -18,11 +25,8 @@ def upload_to_gcs(file_path: str, bucket_name: str = "featurebox-ai-uploads") ->
         HTTPException: If upload fails
     """
     try:
-        # Initialize the GCS client
-        client = storage.Client()
-        
-        # Get the bucket
-        bucket = client.bucket(bucket_name)
+        # Uses global storage client initialized with token-based credentials
+        bucket = storage_client.bucket(bucket_name)
         
         # Create a blob object from the file
         blob_name = os.path.basename(file_path)
@@ -47,8 +51,7 @@ def download_blob(bucket_name: str, source_blob_name: str, destination_file_name
         destination_file_name: Where to save locally
     """
     try:
-        client = storage.Client()
-        bucket = client.bucket(bucket_name)
+        bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(source_blob_name)
 
         os.makedirs(os.path.dirname(destination_file_name), exist_ok=True)
