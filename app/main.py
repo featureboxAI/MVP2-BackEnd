@@ -19,6 +19,7 @@ from datetime import timedelta
 from fastapi.responses import StreamingResponse
 import requests
 from io import BytesIO
+from google.auth import default
 
 
 # Set Google Cloud credentials using relative path
@@ -51,13 +52,20 @@ app.add_middleware(
 )
 
 def generate_signed_url(bucket_name, blob_name, expiration_minutes=10):
-    client = storage.Client()
+    # Gest token-based credentials from Cloud Run service account
+    credentials, project_id = default()
+    credentials.refresh(Request())  # Important: refresh token
+
+    #  Use credentials explicitly
+    client = storage.Client(credentials=credentials, project=project_id)
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(blob_name)
+
     url = blob.generate_signed_url(
         version="v4",
         expiration=timedelta(minutes=expiration_minutes),
         method="GET",
+        credentials=credentials,  # Required for token-based signing
     )
     return url
 
