@@ -1,5 +1,6 @@
-from fastapi import FastAPI, Request, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse, FileResponse
+from google.auth.transport.requests import Request as GoogleAuthRequest
 from zipfile import ZipFile, BadZipFile
 import os
 import requests
@@ -17,7 +18,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from datetime import timedelta
 from fastapi.responses import StreamingResponse
-import requests
 from io import BytesIO
 from google.auth import default
 
@@ -54,7 +54,8 @@ app.add_middleware(
 def generate_signed_url(bucket_name, blob_name, expiration_minutes=10):
     # Gest token-based credentials from Cloud Run service account
     credentials, project_id = default()
-    credentials.refresh(Request())  # Important: refresh token
+    credentials.refresh(GoogleAuthRequest())
+
 
     #  Use credentials explicitly
     client = storage.Client(credentials=credentials, project=project_id)
