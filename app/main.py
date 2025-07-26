@@ -1,5 +1,8 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse, FileResponse
+import google.auth
+from google.auth.transport.requests import Request
+from google.auth.iam import IAMSigner
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from zipfile import ZipFile, BadZipFile
 import os
@@ -51,24 +54,66 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ─────────────────────────────────────────────
+# Updated signed URL function — Cloud Run safe
+# ─────────────────────────────────────────────
 def generate_signed_url(bucket_name, blob_name, expiration_minutes=10):
-    # Gest token-based credentials from Cloud Run service account
-    credentials, project_id = default()
-    credentials.refresh(GoogleAuthRequest())
+    import google.auth
+    from google.auth.transport.requests import Request
+    from google.auth.iam import IAMSigner
+    from google.cloud import storage
+    from datetime import timedelta
+    import os
 
+    # Step 1: Load token-based credentials from Cloud Run identity
+    credentials, project_id = google.auth.default()
 
-    #  Use credentials explicitly
-    client = storage.Client(credentials=credentials, project=project_id)
+    # Step 2: Refresh credentials to obtain a valid access token
+    credentials.refresh(Request())  # ✅ MUST DO — or you won’t have .token populated
+
+    # Step 3: Read service account email from env var
+    service_account_email = os.getenv("GOOGLE_SERVICE_ACCOUNT_EMAIL")
+    if not service_account_email:
+        raise RuntimeError("Missing env var: GOOGLE_SERVICE_ACCOUNT_EMAIL")
+
+    # Step 4: Create IAMSigner to sign on behalf of the service account using IAM API
+    signer = IAMSigner(Request(), credentials, service_account_email)
+
+    # Step 5: Create storage client and locate blob
+    client = storage.Client(project=project_id, credentials=credentials)
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(blob_name)
 
-    url = blob.generate_signed_url(
+    # Step 6: Generate signed URL (v4) using IAMSigner
+    signed_url = blob.generate_signed_url(
         version="v4",
         expiration=timedelta(minutes=expiration_minutes),
         method="GET",
-        credentials=credentials,  # Required for token-based signing
+        service_account_email=service_account_email,  # 👈 explicitly provide SA email
+        access_token=credentials.token,               # 👈 needed when using IAMSigner
+        signer=signer,                                # 👈 IAM signer handles signing
     )
-    return url
+
+    return signed_url
+
+# def generate_signed_url(bucket_name, blob_name, expiration_minutes=10):
+#     # Gest token-based credentials from Cloud Run service account
+#     credentials, project_id = google.auth.default()
+#     credentials.refresh(Request())
+
+
+#     #  Use credentials explicitly
+#     client = storage.Client(credentials=credentials, project=project_id)
+#     bucket = client.bucket(bucket_name)
+#     blob = bucket.blob(blob_name)
+
+#     url = blob.generate_signed_url(
+#         version="v4",
+#         expiration=timedelta(minutes=expiration_minutes),
+#         method="GET",
+#         credentials=credentials,  # Required for token-based signing
+#     )
+#     return url
 
 def upload_to_gcs(file_path: str, bucket_name = "featurebox-ai-uploads") -> str:
     try:
