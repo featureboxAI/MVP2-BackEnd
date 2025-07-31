@@ -12,9 +12,15 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+
 # Copy entire application code into container
 COPY . .
+
+# Set proper permissions
 RUN chmod +x entrypoint.sh
+
+# Verify files are copied
+RUN ls -la /app/
 
 
 ENV PYTHONPATH=/app

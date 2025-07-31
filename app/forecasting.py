@@ -533,12 +533,12 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
                 exog_series[(sheet_name, item)] = (ts_orig, ts_cons)
 
     #=== Limited SKUs for testing ===
-    def _limit_dict(orig_dict, n=5):
+    def _limit_dict(orig_dict, n=10):
         return dict(list(orig_dict.items())[:n])
 
-    non_exog_series = _limit_dict(non_exog_series, n=5)
+    non_exog_series = _limit_dict(non_exog_series, n=10)
 
-    exog_series = _limit_dict(exog_series, n=5)
+    exog_series = _limit_dict(exog_series, n=10)
     # ─────────────────────────────────────────────
     # Run non-exog and exog forecast drivers
     # ─────────────────────────────────────────────
