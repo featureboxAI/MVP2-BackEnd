@@ -1,11 +1,7 @@
 import pandas as pd
 import numpy as np
-import time
+import time, os, sys, warnings, psutil
 import multiprocessing as mp
-import os
-import warnings
-import sys
-import psutil
 from pathlib import Path
 from datetime import datetime
 from tensorflow.keras.models import Sequential
@@ -39,6 +35,28 @@ def smape(y_true, y_pred):
 def nrmse(y_true, y_pred):
     return 100 * (np.sqrt(np.mean((y_true - y_pred)**2)) / (y_true.max() - y_true.min()))
 
+
+# ========= Heuristic thresholds used by ARIMA =========
+MIN_POINTS         = 15      
+ZERO_RATIO_MAX     = 0.50    #  skip if >50 % zeros
+MISSING_RATIO_MAX  = 0.25    #  skip if >25 % NaNs
+
+def _naive_forecast(last_val, horizon):          
+    """Very simple repeat-last forecast."""
+    return np.repeat(last_val, horizon)
+
+def is_series_healthy(series: pd.Series) -> bool: 
+    """Quick data-quality screen."""
+    if len(series.dropna()) < MIN_POINTS:
+        return False
+    if (series == 0).mean() > ZERO_RATIO_MAX:
+        return False
+    if series.dropna().nunique() == 1:            # constant or flat
+        return False
+    if 1 - len(series.dropna()) / len(series) > MISSING_RATIO_MAX:
+        return False
+    return True
+
 # At this point:
 #   non_exog_series holds every (sheet,item): orig_series
 #   exog_series     holds only those for which consumption exists
@@ -47,7 +65,6 @@ def nrmse(y_true, y_pred):
 
 #  Model wrappers for non-exogenous
 # -----------------------------------------
-
 def fit_holt_winters(train, test):
     model = ExponentialSmoothing(train, trend='add', seasonal='add', seasonal_periods=12)
     fit = model.fit(optimized=True)
@@ -62,10 +79,17 @@ def fit_ets(train, test):
 
 def fit_pmdarima(train, test):
     train_clean, test_clean = train.dropna(), test.dropna()
+
+    if not is_series_healthy(train):             
+        last = train.dropna().iloc[-1] if train.dropna().size else 0
+        preds = _naive_forecast(last, len(test)) 
+        return pd.Series(preds, index=test.index), np.inf
+    
     # Fallback for very short series
     if len(train_clean) < 3:
-        fcast = np.repeat(train_clean.iloc[-1] if len(train_clean)>0 else 0, len(test))
-        return pd.Series(fcast, index=test.index), np.inf
+        last_val = train_clean.iloc[-1] if len(train_clean) else 0
+        preds = _naive_forecast(last_val, len(test))
+        return pd.Series(preds, index=test.index), np.inf
     
     # First attempt seasonal ARIMA with custom p/d/q ranges (try ACF and PACF methods: statsmodels statstools))
     try:
@@ -74,7 +98,9 @@ def fit_pmdarima(train, test):
             # start_p=1, max_p=1,      #range of length of ACF values
             # start_q=1, max_q=1,
             # d=None, D=None,
-            seasonal=False,        
+            seasonal=False,
+            D = 0,
+            m= 1,       
             max_order=2,           
             stepwise=True,
             error_action='ignore',
@@ -83,15 +109,29 @@ def fit_pmdarima(train, test):
             n_jobs=1,
             information_criterion='bic'
         )
-    except ValueError:
-        last = train_clean.iloc[-1] if len(train_clean) > 0 else 0
-        preds = np.repeat(last, len(test))
+    except Exception as e:                       
+        print(f"[ARIMA_skip] {e}")
+        last = train_clean.iloc[-1] if len(train_clean) else 0
+        preds = _naive_forecast(last, len(test))
         return pd.Series(preds, index=test.index), np.inf
+    
+    # Instead, we fall back to a naive forecast:
+#   - Repeat the last observed value from the training set
+#   - Fill predictions for the *entire original test length*
+#   - Maintain correct index alignment with the original test index\
+    if len(test_clean) == 0:
+        return pd.Series(_naive_forecast(train_clean.iloc[-1], len(test)),
+                     index=test.index), np.inf
 
     vals = model.predict(n_periods=len(test_clean))
     pred = pd.Series(index=test.index, dtype=float)
     pred.loc[test_clean.index] = vals
     return pred, nrmse(test_clean, vals)
+
+    # except ValueError:
+    #     last = train_clean.iloc[-1] if len(train_clean) > 0 else 0
+    #     preds = np.repeat(last, len(test))
+    #     return pd.Series(preds, index=test.index), np.inf   
 
 def fit_kalman(train, test):
     clean = train.dropna()
@@ -164,10 +204,15 @@ def fit_pmdarima_exog(train, test, exog_train, exog_test):
     y_train = train.dropna()
     ex_train = exog_train.loc[y_train.index]
 
+    if not is_series_healthy(train):
+        last_val = y_train.iloc[-1] if len(y_train) else 0              
+        preds = _naive_forecast(last_val, len(test))
+        return pd.Series(preds, index=test.index), np.inf
+
     # Short series fallback
     if len(y_train) < 3:
         last_val = y_train.iloc[-1] if len(y_train) > 0 else 0
-        preds = np.repeat(last_val, len(test))
+        preds = _naive_forecast(last_val, len(test))
         return pd.Series(preds, index=test.index), np.inf
     
     try:
@@ -175,20 +220,47 @@ def fit_pmdarima_exog(train, test, exog_train, exog_test):
             y=y_train,
             exogenous=ex_train,
             seasonal=False,
-            m=12,
+            D = 0,
+            m = 1,
             error_action='ignore', suppress_warnings=True,
             stepwise=True
     )
         # forecast n steps with exogenous test
         preds = model.predict(n_periods=len(test), exogenous=exog_test)
 
-    except ValueError as e:
-        print(f"[WARN] ARIMA_exog failed: {e}")
-        last_val = y_train.iloc[-1] if len(y_train) > 0 else 0
-        preds = np.repeat(last_val, len(test))
+    except Exception as e:
+        print(f"[ARIMA_exog-skip-fit] {e}")
+        last_val = y_train.iloc[-1] if len(y_train) else 0
+        preds = _naive_forecast(last_val, len(test))
+        return pd.Series(preds, index=test.index), np.inf
+    
+    # ── Drop NaNs from test for prediction safety
+    y_test_clean = test.dropna()
+    ex_test_clean = exog_test.loc[y_test_clean.index]
+
+    # ── Prediction safety check ─────────────────────────────────────────────
+    # If test data is completely NaN after dropna:
+    #   - ARIMA can't predict n_periods=0
+    #   - Fall back to naive forecast for full test horizon
+    if len(y_test_clean) == 0:
+        return pd.Series(
+            _naive_forecast(y_train.iloc[-1], len(test)),  # repeat last train value
+            index=test.index                               # keep timestamps
+        ), np.inf                                          # error = infinity
+    
+    try:
+        preds = model.predict(n_periods=len(y_test_clean), exogenous=ex_test_clean)
+    except Exception as e:
+        print(f"[ARIMA_exog-skip-predict] {e}")
+        last_val = y_train.iloc[-1] if len(y_train) else 0
+        preds = _naive_forecast(last_val, len(test))
 
     return pd.Series(preds, index=test.index), nrmse(test, preds)
 
+    # except Exception as e:
+    #     print(f"[ARIMA_exog-skip] {e}")
+    #     last = y_train.iloc[-1] if len(y_train) else 0
+    #     preds = _naive_forecast(last, len(test))
 
 def fit_prophet_exog(train, test, exog_train, exog_test):
     """Prophet with an external regressor."""
@@ -225,7 +297,14 @@ def run_non_exog_driver(series_dict):
         print(f"[NON-EXOG] Sheet {si}/{total_sheets}: '{sheet}' — Item {ii}/{len(sheet_to_items[sheet])}: {item}")
         
         ts = series_dict[(sheet, item)]
-        ts = ts["2018-01-01":"2025-05-01"]
+        # ts = ts["2018-01-01":"2025-05-01"]
+        # ── NEW ── dynamically select available range
+        ts = ts.dropna()                      # remove NaN months
+        ts = ts.asfreq('MS')                  # ensure monthly frequency
+        if ts.empty:
+            print(f"[WARN] Skipping {sheet}-{item}: No valid data")
+            continue
+        # ── Train/test split dynamically
         split = int(len(ts) * 0.8)
         train, test = ts.iloc[:split], ts.iloc[split:]
 
@@ -371,10 +450,10 @@ def run_non_exog_driver(series_dict):
             fc = pd.Series(np.repeat(last, 12), index=fut_idx)
 
         # record metrics
-        row = {'sheet': sheet, 'item': item, 'bucket': 'non_exog'}
-        for m in preds:
-            row[f'nrmse_{m}'] = errs_nrmse[m]
-            row[f'smape_{m}'] = errs_smape[m]
+        row = {'sheet': sheet,'item': item, 'bucket': 'non_exog', 'model': best,'nrmse': errs_nrmse[best],'smape': errs_smape[best] }
+        # for m in preds:
+        #     row[f'nrmse_{m}'] = errs_nrmse[m]
+        #     row[f'smape_{m}'] = errs_smape[m]
         df_metrics.append(row)
 
         # record forecasts
@@ -388,20 +467,27 @@ def run_non_exog_driver(series_dict):
     
 def run_exog_driver(series_dict):
     df_metrics, df_forecasts = [], []
-
-    
     keys = list(series_dict.keys())
     sheets = sorted({s for s, _ in keys})
     total_sheets = len(sheets)
     sheet_to_items = {s: [i for (s2, i) in keys if s2 == s] for s in sheets}
    
-
     for si, (sheet, item) in enumerate(keys, 1):
         ii = sheet_to_items[sheet].index(item) + 1
         print(f"[EXOG] Sheet {si}/{total_sheets}: '{sheet}' — Item {ii}/{len(sheet_to_items[sheet])}: {item}")
         orig_ts, cons_ts = series_dict[(sheet, item)]
-        orig_ts = orig_ts["2018-01-01":"2025-05-01"].asfreq('MS')
+        # orig_ts = orig_ts["2018-01-01":"2025-05-01"].asfreq('MS')
+        # ── Dynamic date range from available data
+        orig_ts = orig_ts.dropna().asfreq('MS')   # ensure monthly freq
+        cons_ts = cons_ts.dropna().asfreq('MS')   # ensure monthly freq
+
+        if orig_ts.empty:
+            print(f"[WARN] Skipping {sheet}-{item}: No valid original data")
+            continue
+
         cons_ts = cons_ts.reindex(orig_ts.index).asfreq('MS').fillna(method='ffill')
+
+        # Train/test split dynamically
         split = int(len(orig_ts) * 0.8)
         train, test = orig_ts.iloc[:split], orig_ts.iloc[split:]
         ex_train = cons_ts.iloc[:split].to_frame('cons')
@@ -443,7 +529,7 @@ def run_exog_driver(series_dict):
             y_full, ex_full = df_full['y'], df_full.drop(columns='y')
             try:
                 m_full = auto_arima(y=y_full, exogenous=ex_full,
-                                    seasonal=True, m=12, stepwise=True, n_jobs=-1)
+                                    seasonal=False, m=1, stepwise=True, n_jobs=-1)
                 fc = pd.Series(m_full.predict(n_periods=12, exogenous=cons_ts.iloc[-12:].values.reshape(-1,1)),
                                index=fut_idx)
             except ValueError:
@@ -464,10 +550,10 @@ def run_exog_driver(series_dict):
             fc = pd.Series(m.predict(fut)['yhat'].values, index=fut_idx)
 
         # record both errors
-        row = {'sheet': sheet, 'item': item, 'bucket': 'exog'}
-        for m in preds:
-            row[f'nrmse_{m}'] = errs_nrmse[m]
-            row[f'smape_{m}'] = errs_smape[m]
+        row = {'sheet': sheet, 'item': item, 'bucket': 'exog', 'model': best,'nrmse': errs_nrmse[best], 'smape': errs_smape[best]}
+        # for m in preds:
+        #     row[f'nrmse_{m}'] = errs_nrmse[m]
+        #     row[f'smape_{m}'] = errs_smape[m]
         df_metrics.append(row)
 
         # record forecasts
@@ -493,13 +579,15 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
     print("[DEBUG] Loading core Excel file...")
     df_core = pd.read_excel(filepath, sheet_name=None)
     print(f"[DEBUG] Loaded {len(df_core)} sheets from core Excel")
-    
+
+    #Sprouts-NGVC consumption file
     df_cons = {}
     if cons_path:
         print("[DEBUG] Loading consumption Excel file...")
         df_cons = pd.read_excel(cons_path, sheet_name=None)
         print(f"[DEBUG] Loaded {len(df_cons)} sheets from consumption Excel")
 
+    #Amazon consumption file
     df_amaz = None
     if az_path:
         df_amaz = pd.read_excel(az_path)
@@ -537,6 +625,16 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
         else:
             df_c = None
 
+        #only for exog #DOUBT
+        for item, row in df_o.iterrows():
+            ts_orig = row.dropna().asfreq('MS')
+            if df_c is not None and item in df_c.index:
+                ts_cons = df_c.loc[item].dropna().asfreq('MS')
+                exog_series[(sheet_name, item)] = (ts_orig, ts_cons)
+            else:
+                print(f"[WARN] Skipping {sheet_name} - {item}: No consumption data available")
+#DOUBT
+
         for item, row in df_o.iterrows():
             ts_orig = row.dropna().asfreq('MS')
             if df_c is None or item not in df_c.index:
@@ -546,12 +644,11 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
                 exog_series[(sheet_name, item)] = (ts_orig, ts_cons)
 
     #=== Limited SKUs for testing ===
-    def _limit_dict(orig_dict, n=10):
+    def _limit_dict(orig_dict, n=5):
         return dict(list(orig_dict.items())[:n])
 
-    non_exog_series = _limit_dict(non_exog_series, n=10)
-
-    exog_series = _limit_dict(exog_series, n=10)
+    non_exog_series = _limit_dict(non_exog_series, n=5)
+    exog_series = _limit_dict(exog_series, n=5)
     # ─────────────────────────────────────────────
     # Run non-exog and exog forecast drivers
     # ─────────────────────────────────────────────
@@ -566,8 +663,7 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
     metrics = pd.concat([non_metrics, ex_metrics], ignore_index=True)
     forecasts = pd.concat([non_forecasts, ex_forecasts], ignore_index=True)
 
-    # ADD HISTORIC VALUE (NEW)
-    # ─────────────────────────────────────────────
+    # Add Historic Value coloumn to the output 
     # Ensure ds is datetime
     forecasts['ds'] = pd.to_datetime(forecasts['ds'])
     
@@ -591,7 +687,7 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
     output_path = Path(f"combined_results_{timestamp}.xlsx")  # timestamped file
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        forecasts.to_excel(writer, sheet_name="Forecasts", index=False)
+        forecasts.to_excel(writer, sheet_name="forecast", index=False)
         metrics.to_excel(writer, sheet_name="Metrics", index=False)
 
     # ─────────────────────────────────────────────
