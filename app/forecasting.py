@@ -71,9 +71,9 @@ def fit_pmdarima(train, test):
     try:
         model = auto_arima(
             train_clean,
-            start_p=1, max_p=1,      #range of length of ACF values
-            start_q=1, max_q=1,
-            d=None, D=None,
+            # start_p=1, max_p=1,      #range of length of ACF values
+            # start_q=1, max_q=1,
+            # d=None, D=None,
             seasonal=False,        
             max_order=2,           
             stepwise=True,
@@ -163,15 +163,30 @@ def fit_pmdarima_exog(train, test, exog_train, exog_test):
     # drop missing just in case
     y_train = train.dropna()
     ex_train = exog_train.loc[y_train.index]
-    model = auto_arima(
-        y=y_train,
-        exogenous=ex_train,
-        seasonal=True, m=12,
-        error_action='ignore', suppress_warnings=True,
-        stepwise=True
+
+    # Short series fallback
+    if len(y_train) < 3:
+        last_val = y_train.iloc[-1] if len(y_train) > 0 else 0
+        preds = np.repeat(last_val, len(test))
+        return pd.Series(preds, index=test.index), np.inf
+    
+    try:
+        model = auto_arima(
+            y=y_train,
+            exogenous=ex_train,
+            seasonal=False,
+            m=12,
+            error_action='ignore', suppress_warnings=True,
+            stepwise=True
     )
-    # forecast n steps with exogenous test
-    preds = model.predict(n_periods=len(test), exogenous=exog_test)
+        # forecast n steps with exogenous test
+        preds = model.predict(n_periods=len(test), exogenous=exog_test)
+
+    except ValueError as e:
+        print(f"[WARN] ARIMA_exog failed: {e}")
+        last_val = y_train.iloc[-1] if len(y_train) > 0 else 0
+        preds = np.repeat(last_val, len(test))
+
     return pd.Series(preds, index=test.index), nrmse(test, preds)
 
 
@@ -461,8 +476,6 @@ def run_exog_driver(series_dict):
             'model': best, 'ds': fc.index, 'forecast': fc.values
         }))
 
-
-    
     return pd.DataFrame(df_metrics), pd.concat(df_forecasts, ignore_index=True),None
 
 def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None):
@@ -546,8 +559,6 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
     print(f"[DEBUG] Prepared {len(non_exog_series)} non-exog series")
     print(f"[DEBUG] Prepared {len(exog_series)} exog series")
 
-    
-    
     non_metrics, non_forecasts, _ = run_non_exog_driver(non_exog_series) 
     ex_metrics, ex_forecasts, _ = run_exog_driver(exog_series)
 
@@ -555,10 +566,28 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
     metrics = pd.concat([non_metrics, ex_metrics], ignore_index=True)
     forecasts = pd.concat([non_forecasts, ex_forecasts], ignore_index=True)
 
+    # ADD HISTORIC VALUE (NEW)
+    # ─────────────────────────────────────────────
+    # Ensure ds is datetime
+    forecasts['ds'] = pd.to_datetime(forecasts['ds'])
+    
+    # Find last month forecast for each SKU
+    last_month_map = (
+        forecasts.loc[forecasts.groupby(['sheet', 'item', 'bucket', 'model'])['ds'].idxmax()]
+        .set_index(['sheet', 'item', 'bucket', 'model'])['forecast']
+        .to_dict()
+    )
+
+    # Add historic_value column
+    forecasts['historic_value'] = forecasts.apply(
+        lambda r: last_month_map.get((r['sheet'], r['item'], r['bucket'], r['model']), None),
+        axis=1
+    )
+
     # ─────────────────────────────────────────────
     # Save to timestamped Excel file
     # ─────────────────────────────────────────────
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") 
     output_path = Path(f"combined_results_{timestamp}.xlsx")  # timestamped file
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:

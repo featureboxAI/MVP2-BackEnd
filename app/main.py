@@ -22,6 +22,7 @@ from urllib.parse import quote_plus
 app = FastAPI()
 
 VM_STATUS_URL = "http://34.135.50.176:8000/status" 
+# VM_STATUS_URL = "http://34.135.50.176:8002/status" #local testing
 BUCKET_NAME = "featurebox-ai-uploads"
 
 # Forecast status store (idle | running | completed | error)
@@ -68,11 +69,7 @@ async def forecast_complete(request: Request):
         print(f"[ERROR][Cloud Run] forecast-complete error: {e}")
         traceback.print_exc()
         return {"status": "error", "message": str(e)}
-
-
-# =========================================================
-# Status check from UI
-# =========================================================
+    
 # =========================================================
 # Status endpoint (Updated to verify GCS before "completed")
 # =========================================================
@@ -208,6 +205,9 @@ def trigger_forecast_on_vm(core_gcs, cons_gcs=None, az_gcs=None):
         raise ValueError("core_gcs must be provided to trigger_forecast_on_vm")
 
     vm_url = os.getenv("FORECAST_VM_ENDPOINT", "http://34.135.50.176:8000/run-forecast")
+
+    #local testing
+    # vm_url = os.getenv("FORECAST_VM_ENDPOINT", "http://34.135.50.176:8002/run-forecast")
     
     print(f"[DEBUG] VM URL: {vm_url}")
     print(f"[DEBUG] Making POST request to VM endpoint")
@@ -358,8 +358,6 @@ async def upload_zip(file: UploadFile = File(...)):
             vm_result = trigger_forecast_on_vm(gcs_core, gcs_cons, gcs_az)
             print("[DEBUG] Result from VM:", vm_result)
 
-            print("[DEBUG] VM returned:", vm_result)
-
             # Log response
             print("[BACKEND] VM responded with:", vm_result)
 
@@ -369,28 +367,28 @@ async def upload_zip(file: UploadFile = File(...)):
                 blob_path = gcs_uri.replace(f"gs://{BUCKET_NAME}/", "")
                 
                 # Use default credentials in Cloud Run (no JSON file path)
-                client = storage.Client()  # NEW: Cloud Run service account will be used
-                print(f"[INFO] Cloud Run project: {client.project}")  # NEW
+                client = storage.Client()  
+                print(f"[INFO] Cloud Run project: {client.project}")  
                 try:
-                    sa_email = client._credentials.service_account_email  # NEW
-                    print(f"[INFO] Using service account: {sa_email}")    # NEW
+                    sa_email = client._credentials.service_account_email 
+                    print(f"[INFO] Using service account: {sa_email}")   
                 except AttributeError:
-                    print("[WARNING] Could not determine service account email")  # NEW
+                    print("[WARNING] Could not determine service account email")  
                
-                blob   = client.bucket(BUCKET_NAME).blob(blob_path)  # NEW: Direct bucket access
+                blob   = client.bucket(BUCKET_NAME).blob(blob_path)  
                 
-                data      = blob.download_as_bytes()                               # (unchanged)
-                filename  = os.path.basename(blob_path)                            # (unchanged)
-                headers   = {                                                      # (unchanged)
-                    "Content-Disposition": f"attachment; filename=\"{filename}\""  # (unchanged)
-                }                                                                       # NEW
-                return StreamingResponse(                                          # NEW
-                    BytesIO(data),                                                 # NEW
-                    media_type=(                                                   # NEW
+                data      = blob.download_as_bytes()                               
+                filename  = os.path.basename(blob_path)                        
+                headers   = {                                                     
+                    "Content-Disposition": f"attachment; filename=\"{filename}\""  
+                }                                                                      
+                return StreamingResponse(                                          
+                    BytesIO(data),                                               
+                    media_type=(                                                   
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    ),                                                             # NEW
-                    headers=headers,                                               # NEW
-                )                                                                  # NEW
+                    ),                                                             
+                    headers=headers,                                              
+                )                                                                
 
             return JSONResponse({"status": "started", "message": "Forecast started successfully"})  
            
@@ -477,38 +475,41 @@ async def test_gcs():
             "bucket": BUCKET_NAME
         }
 
-@app.get("/test-vm")
-async def test_vm():
-    """
-    Test VM connectivity and endpoint
-    """
-    vm_url = os.getenv("FORECAST_VM_ENDPOINT", "http://34.135.50.176:8000/run-forecast")
+# @app.get("/test-vm")
+# async def test_vm():
+#     """
+#     Test VM connectivity and endpoint
+#     """
+#     vm_url = os.getenv("FORECAST_VM_ENDPOINT", "http://34.135.50.176:8000/run-forecast")
     
-    # Test with a simple payload
-    test_payload = {
-        "core_path": "test/path.xlsx",
-        "cons_path": None,
-        "az_path": None
-    }
+ 
+
+
+#     # Test with a simple payload
+#     test_payload = {
+#         "core_path": "test/path.xlsx",
+#         "cons_path": None,
+#         "az_path": None
+#     }
     
-    try:
-        headers = {'Content-Type': 'application/json'}
-        response = requests.post(vm_url, json=test_payload, headers=headers, timeout=10)
-        return {
-            "status": "success",
-            "vm_status_code": response.status_code,
-            "vm_response": response.text,
-            "vm_url": vm_url,
-            "request_method": "POST",
-            "request_headers": headers
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e),
-            "vm_url": vm_url,
-            "request_method": "POST"
-        }
+#     try:
+#         headers = {'Content-Type': 'application/json'}
+#         response = requests.post(vm_url, json=test_payload, headers=headers, timeout=10)
+#         return {
+#             "status": "success",
+#             "vm_status_code": response.status_code,
+#             "vm_response": response.text,
+#             "vm_url": vm_url,
+#             "request_method": "POST",
+#             "request_headers": headers
+#         }
+#     except Exception as e:
+#         return {
+#             "status": "error",
+#             "error": str(e),
+#             "vm_url": vm_url,
+#             "request_method": "POST"
+#         }
 
 
 
