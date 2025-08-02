@@ -35,6 +35,11 @@ def smape(y_true, y_pred):
 def nrmse(y_true, y_pred):
     return 100 * (np.sqrt(np.mean((y_true - y_pred)**2)) / (y_true.max() - y_true.min()))
 
+# ADJUST SERIES FUNCTION 
+def adjust_series(ts):
+    ts = ts.asfreq('MS')                # Ensure monthly frequency (dynamic range)
+    ts = ts.fillna(method='ffill')      # Fill missing values to avoid NaNs in models
+    return ts
 
 # ========= Heuristic thresholds used by ARIMA =========
 MIN_POINTS         = 15      
@@ -300,7 +305,7 @@ def run_non_exog_driver(series_dict):
         # ts = ts["2018-01-01":"2025-05-01"]
         # ── NEW ── dynamically select available range
         ts = ts.dropna()                      # remove NaN months
-        ts = ts.asfreq('MS')                  # ensure monthly frequency
+        ts = ts.asfreq('MS').fillna(method='ffill')                  # ensure monthly frequency
         if ts.empty:
             print(f"[WARN] Skipping {sheet}-{item}: No valid data")
             continue
@@ -439,7 +444,8 @@ def run_non_exog_driver(series_dict):
             future_preds = []
             for _ in range(12):
                 x = np.array(history[-lb:]).reshape(reshape)
-                p = model.predict(x)[0]
+                p = float(model.predict(x).flatten()[0])  # Force scalar prediction
+                # p = model.predict(x)[0]
                 future_preds.append(p)
                 history.append(p)
             fc = pd.Series(future_preds, index=fut_idx)
@@ -456,10 +462,21 @@ def run_non_exog_driver(series_dict):
         #     row[f'smape_{m}'] = errs_smape[m]
         df_metrics.append(row)
 
+         # Determine historic value
+        first_forecast_month = fc.index.min()
+        historic_month = first_forecast_month - pd.DateOffset(months=1)
+
+        if historic_month in ts.index:
+            historic_value = ts.loc[historic_month]
+        else:
+            historic_month = ts.index[-1]
+            historic_value = ts.iloc[-1]
+
+
         # record forecasts
         df_forecasts.append(pd.DataFrame({
             'sheet': sheet, 'item': item, 'bucket': 'non_exog',
-            'model': best, 'ds': fc.index, 'forecast': fc.values
+            'model': best, 'ds': fc.index, 'forecast': fc.values, 'historic_value': historic_value 
         }))
 
     # return pd.DataFrame(df_metrics), pd.concat(df_forecasts, ignore_index=True)
@@ -478,8 +495,10 @@ def run_exog_driver(series_dict):
         orig_ts, cons_ts = series_dict[(sheet, item)]
         # orig_ts = orig_ts["2018-01-01":"2025-05-01"].asfreq('MS')
         # ── Dynamic date range from available data
-        orig_ts = orig_ts.dropna().asfreq('MS')   # ensure monthly freq
+        orig_ts = orig_ts.dropna().asfreq('MS').fillna(method='ffill')  # ensure monthly freq
         cons_ts = cons_ts.dropna().asfreq('MS')   # ensure monthly freq
+      
+
 
         if orig_ts.empty:
             print(f"[WARN] Skipping {sheet}-{item}: No valid original data")
@@ -556,10 +575,19 @@ def run_exog_driver(series_dict):
         #     row[f'smape_{m}'] = errs_smape[m]
         df_metrics.append(row)
 
+        first_forecast_month = fc.index.min()
+        historic_month = first_forecast_month - pd.DateOffset(months=1)
+        if historic_month in orig_ts.index:
+            historic_value = orig_ts.loc[historic_month]
+        else:
+            historic_month = orig_ts.index[-1]
+            historic_value = orig_ts.iloc[-1]
+        # ─────────────────────────────────────────────
+
         # record forecasts
         df_forecasts.append(pd.DataFrame({
             'sheet': sheet, 'item': item, 'bucket': 'exog',
-            'model': best, 'ds': fc.index, 'forecast': fc.values
+            'model': best, 'ds': fc.index, 'forecast': fc.values,'historic_value': historic_value
         }))
 
     return pd.DataFrame(df_metrics), pd.concat(df_forecasts, ignore_index=True),None
@@ -625,16 +653,6 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
         else:
             df_c = None
 
-        #only for exog #DOUBT
-        for item, row in df_o.iterrows():
-            ts_orig = row.dropna().asfreq('MS')
-            if df_c is not None and item in df_c.index:
-                ts_cons = df_c.loc[item].dropna().asfreq('MS')
-                exog_series[(sheet_name, item)] = (ts_orig, ts_cons)
-            else:
-                print(f"[WARN] Skipping {sheet_name} - {item}: No consumption data available")
-#DOUBT
-
         for item, row in df_o.iterrows():
             ts_orig = row.dropna().asfreq('MS')
             if df_c is None or item not in df_c.index:
@@ -644,11 +662,11 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
                 exog_series[(sheet_name, item)] = (ts_orig, ts_cons)
 
     #=== Limited SKUs for testing ===
-    def _limit_dict(orig_dict, n=5):
-        return dict(list(orig_dict.items())[:n])
+    # def _limit_dict(orig_dict, n=5):
+    #     return dict(list(orig_dict.items())[:n])
 
-    non_exog_series = _limit_dict(non_exog_series, n=5)
-    exog_series = _limit_dict(exog_series, n=5)
+    # non_exog_series = _limit_dict(non_exog_series, n=5)
+    # exog_series = _limit_dict(exog_series, n=5)
     # ─────────────────────────────────────────────
     # Run non-exog and exog forecast drivers
     # ─────────────────────────────────────────────
@@ -663,23 +681,33 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
     metrics = pd.concat([non_metrics, ex_metrics], ignore_index=True)
     forecasts = pd.concat([non_forecasts, ex_forecasts], ignore_index=True)
 
-    # Add Historic Value coloumn to the output 
-    # Ensure ds is datetime
-    forecasts['ds'] = pd.to_datetime(forecasts['ds'])
+    # # Add Historic Value coloumn to the output 
+    # # Ensure ds is datetime
+    # forecasts['ds'] = pd.to_datetime(forecasts['ds']).dt.to_period('M').dt.to_timestamp()
+
+    # # --- New Historic Value Logic ---
+    # historic_values = {}
+    # for (sheet, item, bucket, model), group_df in forecasts.groupby(['sheet', 'item', 'bucket', 'model']):
+    #     # Get the original time series for this SKU
+    #     if bucket == 'non_exog':
+    #         ts = non_exog_series.get((sheet, item))
+    #     else:
+    #         ts = exog_series.get((sheet, item))[0]  # orig_ts for exog
+
+    #     if ts is not None and len(ts) > 0:
+    #         # Take last observed month before forecast horizon
+    #         historic_month = ts.index[-1]
+    #         historic_value = ts.iloc[-1]
+    #         historic_values[(sheet, item, bucket, model)] = historic_value
+    #     else:
+    #         historic_values[(sheet, item, bucket, model)] = None
+
+    # forecasts['historic_value'] = forecasts.apply(
+    #     lambda r: historic_values.get((r['sheet'], r['item'], r['bucket'], r['model'])),
+    #     axis=1
+    # )
+
     
-    # Find last month forecast for each SKU
-    last_month_map = (
-        forecasts.loc[forecasts.groupby(['sheet', 'item', 'bucket', 'model'])['ds'].idxmax()]
-        .set_index(['sheet', 'item', 'bucket', 'model'])['forecast']
-        .to_dict()
-    )
-
-    # Add historic_value column
-    forecasts['historic_value'] = forecasts.apply(
-        lambda r: last_month_map.get((r['sheet'], r['item'], r['bucket'], r['model']), None),
-        axis=1
-    )
-
     # ─────────────────────────────────────────────
     # Save to timestamped Excel file
     # ─────────────────────────────────────────────

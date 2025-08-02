@@ -30,7 +30,7 @@ forecast_status_store = {"status": "idle", "forecast_gcs": None}
 
 # CORS CONFIGURATION
 origins = [
-    "https://featurebox-ai-ui-mvp-2-05.lovable.app/",
+    "https://featurebox-frontend-service-666676702816.us-west1.run.app/",
     "http://localhost:3000",
 ]
 
