@@ -13,6 +13,8 @@ from google.oauth2 import service_account
 from urllib.parse import quote_plus
 from google.cloud import compute_v1
 from datetime import datetime 
+from google.cloud import storage   
+from google.api_core.exceptions import GoogleAPIError 
 
 # Set Google Cloud credentials using relative path
 # current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -184,32 +186,47 @@ async def forecast_complete(request: Request):
 @app.get("/status")
 async def get_status():
     try:
-        current_status = forecast_status_store.get("status", "idle")
+        # 1. Check actual VM status using GCP Compute API
+        compute_client = compute_v1.InstancesClient()
+        instance = compute_client.get(project=PROJECT_ID, zone=ZONE, instance=INSTANCE_NAME)
+        vm_status = instance.status  # e.g., "RUNNING", "TERMINATED", etc.
+
+        # 2.Get forecast file path from store (just for GCS path)
         forecast_file_gcs = forecast_status_store.get("forecast_gcs")
 
-        # Check GCS if status is marked completed
-        if current_status == "completed" and forecast_file_gcs:
-            bucket_name = forecast_file_gcs.split("/")[2]  
-            blob_path = "/".join(forecast_file_gcs.split("/")[3:])  
+        # Check GCS only if VM is running
+        if vm_status == "RUNNING" and forecast_file_gcs:
+            bucket_name = forecast_file_gcs.split("/")[2]
+            blob_path = "/".join(forecast_file_gcs.split("/")[3:])
             
-            client = storage.Client()  
-            bucket = client.bucket(bucket_name) 
-            blob = bucket.blob(blob_path)  
+            client = storage.Client()
+            bucket = client.bucket(bucket_name)
+            blob = bucket.blob(blob_path)
 
-            # Only confirm completed if file exists
-            if not blob.exists():  
-                print("[DEBUG] File not yet in GCS, downgrading status to processing")  # NEW
-                return {"status": "processing"}  
+            if blob.exists():
+                forecast_status = "completed"
+            else:
+                forecast_status = "running"
+        elif vm_status == "RUNNING":
+            forecast_status = "running"
+        else:
+            forecast_status = "idle"  # VM not running → forecast idle
 
-        # Return status normally if idle, processing, or completed with file in GCS
+        # Return VM + forecast status
         return {
-            "status": current_status,
+            "status": forecast_status,
+            "forecast_status": forecast_status,
+            "vm_status": vm_status,
             "forecast_gcs": forecast_file_gcs
         }
 
+    except GoogleAPIError as gerr:
+        print(f"[ERROR] GCP API Error: {gerr}")
+        return {"forecast_status": "error", "vm_status": "unknown", "message": str(gerr)}
+
     except Exception as e:
         print(f"[ERROR] Failed to get status: {e}")
-        return {"status": "error", "message": str(e)}
+        return {"forecast_status": "error", "vm_status": "unknown", "message": str(e)}
 
    
 # =========================================================

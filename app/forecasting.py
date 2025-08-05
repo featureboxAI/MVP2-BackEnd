@@ -451,9 +451,6 @@ def run_non_exog_driver(series_dict):
 
         # record metrics
         row = {'sheet': sheet,'item': item, 'bucket': 'non_exog', 'model': best,'nrmse': errs_nrmse[best],'smape': errs_smape[best] }
-        # for m in preds:
-        #     row[f'nrmse_{m}'] = errs_nrmse[m]
-        #     row[f'smape_{m}'] = errs_smape[m]
         df_metrics.append(row)
 
         # record forecasts
@@ -548,9 +545,6 @@ def run_exog_driver(series_dict):
 
         # record both errors
         row = {'sheet': sheet, 'item': item, 'bucket': 'exog', 'model': best,'nrmse': errs_nrmse[best], 'smape': errs_smape[best]}
-        # for m in preds:
-        #     row[f'nrmse_{m}'] = errs_nrmse[m]
-        #     row[f'smape_{m}'] = errs_smape[m]
         df_metrics.append(row)
 
         # record forecasts
