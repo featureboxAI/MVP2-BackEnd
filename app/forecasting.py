@@ -109,29 +109,30 @@ def fit_pmdarima(train, test):
             n_jobs=1,
             information_criterion='bic'
         )
+
+         # Instead, we fall back to a naive forecast:
+         # Repeat the last observed value from the training set
+         # Fill predictions for the *entire original test length*
+         #  Maintain correct index alignment with the original test index\
+        if len(test_clean) == 0:
+            return pd.Series(_naive_forecast(train_clean.iloc[-1], len(test)),
+                        index=test.index), np.inf
+
+        vals = model.predict(n_periods=len(test_clean))
+        pred = pd.Series(index=test.index, dtype=float)
+        pred.loc[test_clean.index] = vals
+        return pred, nrmse(test_clean, vals)
+    
+    except ValueError:
+        last = train_clean.iloc[-1] if len(train_clean) > 0 else 0
+        preds = np.repeat(last, len(test))
+        return pd.Series(preds, index=test.index), np.inf 
+    
     except Exception as e:                       
         print(f"[ARIMA_skip] {e}")
         last = train_clean.iloc[-1] if len(train_clean) else 0
         preds = _naive_forecast(last, len(test))
         return pd.Series(preds, index=test.index), np.inf
-    
-    # Instead, we fall back to a naive forecast:
-#   - Repeat the last observed value from the training set
-#   - Fill predictions for the *entire original test length*
-#   - Maintain correct index alignment with the original test index\
-    if len(test_clean) == 0:
-        return pd.Series(_naive_forecast(train_clean.iloc[-1], len(test)),
-                     index=test.index), np.inf
-
-    vals = model.predict(n_periods=len(test_clean))
-    pred = pd.Series(index=test.index, dtype=float)
-    pred.loc[test_clean.index] = vals
-    return pred, nrmse(test_clean, vals)
-
-    # except ValueError:
-    #     last = train_clean.iloc[-1] if len(train_clean) > 0 else 0
-    #     preds = np.repeat(last, len(test))
-    #     return pd.Series(preds, index=test.index), np.inf   
 
 def fit_kalman(train, test):
     clean = train.dropna()
@@ -257,10 +258,6 @@ def fit_pmdarima_exog(train, test, exog_train, exog_test):
 
     return pd.Series(preds, index=test.index), nrmse(test, preds)
 
-    # except Exception as e:
-    #     print(f"[ARIMA_exog-skip] {e}")
-    #     last = y_train.iloc[-1] if len(y_train) else 0
-    #     preds = _naive_forecast(last, len(test))
 
 def fit_prophet_exog(train, test, exog_train, exog_test):
     """Prophet with an external regressor."""
@@ -301,6 +298,7 @@ def run_non_exog_driver(series_dict):
         # ── NEW ── dynamically select available range
         ts = ts.dropna()                      # remove NaN months
         ts = ts.asfreq('MS')                  # ensure monthly frequency
+        ts = ts.fillna(method='ffill').fillna(0) 
         if ts.empty:
             print(f"[WARN] Skipping {sheet}-{item}: No valid data")
             continue
@@ -438,10 +436,12 @@ def run_non_exog_driver(series_dict):
             history = arr.tolist()
             future_preds = []
             for _ in range(12):
+                print(f"[DEBUG] SKU={item} lb={lb} history[-lb:]:", history[-lb:])  
                 x = np.array(history[-lb:]).reshape(reshape)
-                p = model.predict(x)[0]
+                p = float(model.predict(x).ravel()[0])
                 future_preds.append(p)
                 history.append(p)
+
             fc = pd.Series(future_preds, index=fut_idx)
 
         else:
@@ -478,12 +478,9 @@ def run_exog_driver(series_dict):
         orig_ts, cons_ts = series_dict[(sheet, item)]
         # orig_ts = orig_ts["2018-01-01":"2025-05-01"].asfreq('MS')
         # ── Dynamic date range from available data
-        orig_ts = orig_ts.dropna().asfreq('MS')   # ensure monthly freq
-        cons_ts = cons_ts.dropna().asfreq('MS')   # ensure monthly freq
 
-        if orig_ts.empty:
-            print(f"[WARN] Skipping {sheet}-{item}: No valid original data")
-            continue
+        orig_ts = orig_ts.dropna().asfreq('MS').fillna(method='ffill').fillna(0) 
+        cons_ts = cons_ts.dropna().asfreq('MS').fillna(method='ffill').fillna(0)
 
         cons_ts = cons_ts.reindex(orig_ts.index).asfreq('MS').fillna(method='ffill')
 
@@ -623,20 +620,10 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
             df_c = az_cons_workbook[sheet_name].copy()
             df_c.index = df_c.index.astype(str).str.strip().str.upper()
         else:
-            df_c = None
-
-        #only for exog #DOUBT
-        for item, row in df_o.iterrows():
-            ts_orig = row.dropna().asfreq('MS')
-            if df_c is not None and item in df_c.index:
-                ts_cons = df_c.loc[item].dropna().asfreq('MS')
-                exog_series[(sheet_name, item)] = (ts_orig, ts_cons)
-            else:
-                print(f"[WARN] Skipping {sheet_name} - {item}: No consumption data available")
-#DOUBT
+            df_c = None        
 
         for item, row in df_o.iterrows():
-            ts_orig = row.dropna().asfreq('MS')
+            ts_orig = row.dropna().asfreq('MS').fillna(method='ffill').fillna(0)
             if df_c is None or item not in df_c.index:
                 non_exog_series[(sheet_name, item)] = ts_orig
             else:
@@ -644,11 +631,11 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
                 exog_series[(sheet_name, item)] = (ts_orig, ts_cons)
 
     #=== Limited SKUs for testing ===
-    def _limit_dict(orig_dict, n=5):
-        return dict(list(orig_dict.items())[:n])
+    # def _limit_dict(orig_dict, n=10):
+    #     return dict(list(orig_dict.items())[:n])
 
-    non_exog_series = _limit_dict(non_exog_series, n=5)
-    exog_series = _limit_dict(exog_series, n=5)
+    # non_exog_series = _limit_dict(non_exog_series, n=10)
+    # exog_series = _limit_dict(exog_series, n=10)
     # ─────────────────────────────────────────────
     # Run non-exog and exog forecast drivers
     # ─────────────────────────────────────────────

@@ -11,6 +11,8 @@ from fastapi.responses import StreamingResponse
 from io import BytesIO
 from google.oauth2 import service_account
 from urllib.parse import quote_plus
+from google.cloud import compute_v1
+from datetime import datetime 
 
 # Set Google Cloud credentials using relative path
 # current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,6 +22,109 @@ from urllib.parse import quote_plus
 # print(f"[INFO] Using credentials from: {credentials_path}")
 
 app = FastAPI()
+
+PROJECT_ID = "fbfileuploads"                 
+ZONE = "us-central1-a"                          # VM zone
+INSTANCE_NAME = "instance-20250710-091502"      # VM Instance name
+STATIC_VM_IP = "34.135.50.176"
+
+def start_vm_if_needed(start_time=None):
+    if start_time is None:
+        start_time = time.time()
+    """
+    This function:
+    1. Checks if the VM is running
+    2. If not running → Starts the VM
+    3. Waits until Uvicorn is ready by polling the /health endpoint
+    """
+    # 1. Creates a Compute Engine API client to interact with VM instances 
+    # (handles auth + API calls so we can start/stop/get status of the VM easily)
+    client = compute_v1.InstancesClient()
+    
+    # 2. Get the current VM status
+    instance = client.get(project=PROJECT_ID, zone=ZONE, instance=INSTANCE_NAME)
+    status = instance.status
+    print(f"VM status: {status}")
+
+    # 3. Start VM if not running 
+    if status != "RUNNING":
+        print("Starting VM...")
+        operation = client.start(project=PROJECT_ID, zone=ZONE, instance=INSTANCE_NAME)
+        operation.result()  # Wait for operation to complete
+        print("VM start command sent") 
+    else:
+        print("VM already running")
+
+    # 4. Uses static VM external IP (to check Uvicorn readiness)
+
+    vm_ip = STATIC_VM_IP
+    uvicorn_url = f"http://{vm_ip}:8000/health"  # URL for health check endpoint
+    restart_url = f"http://{vm_ip}:8000/restart-uvicorn"  # restart endpoint
+   
+    # Initial wait after starting VM 
+    initial_wait = 30  
+    print(f"[{datetime.now()}] Waiting {initial_wait}s before first readiness check...")
+    time.sleep(initial_wait)
+
+    # 5. Poll until Uvicorn responds or timeout 
+    for attempt in range(30):  
+        try:
+            response = requests.get(uvicorn_url, timeout=5)
+            if response.status_code == 200:
+                elapsed = time.time() - start_time
+                print(f"[{datetime.now()}] Uvicorn is ready on attempt {attempt+1}!")
+                return True
+        except Exception as e:
+            print(f"Attempt {attempt+1}: Uvicorn not ready yet... ({e})")
+            print(f"[DEBUG] Exception: {repr(e)}")
+        time.sleep(3)  # Wait 3 seconds before next check
+
+    # 6. Attempt restart if still not ready
+    print(f"[{datetime.now()}] Uvicorn did not respond after initial wait. Attempting restart...")
+    restart_wait = 20
+    print(f"[{datetime.now()}] Waiting {restart_wait}s before restart attempt...")
+    time.sleep(restart_wait)
+
+    try:
+        restart_resp = requests.post(restart_url, timeout=5)
+        if restart_resp.status_code == 200:
+            print("[INFO] Restart triggered. Checking readiness again...")
+            time.sleep(3)
+
+            for attempt in range(15):
+                try:
+                    response = requests.get(uvicorn_url, timeout=5)
+                    if response.status_code == 200:
+                        elapsed = time.time() - start_time
+                        print(f"[{datetime.now()}] Uvicorn is ready after restart (attempt {attempt+1}, elapsed: {elapsed:.2f}s)")
+                        return True
+                except Exception as e:
+                    print(f"[{datetime.now()}] Retry {attempt+1}: Still not ready... ({e})")
+                time.sleep(5)
+            else:
+                print(f"[{datetime.now()}] Uvicorn failed even after restart.")
+                return False
+        else:
+            print(f"[{datetime.now()}] Restart call failed with status {restart_resp.status_code}")
+            return False
+    except Exception as e:
+        print(f"[{datetime.now()}] Restart call failed: {e}")
+        return False
+
+@app.get("/start-vm")
+def start_vm_endpoint():
+    print(f"[{datetime.now()}] VM start process initiated...")
+    start_time = time.time()
+    ready = start_vm_if_needed(start_time)
+    total_time = time.time() - start_time
+
+    if ready:
+        print(f"[{datetime.now()}] Total elapsed time: {total_time:.2f} seconds")
+        return {"status": "VM and Uvicorn ready"}
+    else:
+        print(f"[{datetime.now()}] VM/Uvicorn failed after {total_time:.2f} seconds")
+        return {"status": "error", "message": "VM started but Uvicorn failed to respond"}
+
 
 VM_STATUS_URL = "http://34.135.50.176:8000/status" 
 # VM_STATUS_URL = "http://34.135.50.176:8002/status" #local testing
@@ -32,12 +137,15 @@ forecast_status_store = {"status": "idle", "forecast_gcs": None}
 origins = [
     "https://featurebox-ai-ui-mvp-2-05.lovable.app",
     "http://localhost:3000",
+    "https://featurebox-frontend-service-666676702816.us-west1.run.app",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=(
         r"(https:\/\/.*\.lovable\.(app|com))"   # any Lovable preview
+        r"|^https:\/\/featurebox-frontend-service-666676702816\.us-west1\.run\.app$"  # Allow Cloud Run frontend
+        r"|(^http:\/\/localhost(:\d+)?$)"       # localhost with optional :port
         r"|^https:\/\/[a-zA-Z0-9\-]+\.lovableproject\.com$"
         r"|(^http:\/\/localhost(:\d+)?$)"       # localhost with optional :port
         r"|(^http:\/\/127\.0\.0\.1(:\d+)?$)"    # 127.0.0.1 with optional :port
@@ -81,17 +189,17 @@ async def get_status():
 
         # Check GCS if status is marked completed
         if current_status == "completed" and forecast_file_gcs:
-            bucket_name = forecast_file_gcs.split("/")[2]  # NEW
-            blob_path = "/".join(forecast_file_gcs.split("/")[3:])  # NEW
+            bucket_name = forecast_file_gcs.split("/")[2]  
+            blob_path = "/".join(forecast_file_gcs.split("/")[3:])  
             
-            client = storage.Client()  # NEW
-            bucket = client.bucket(bucket_name)  # NEW
-            blob = bucket.blob(blob_path)  # NEW
+            client = storage.Client()  
+            bucket = client.bucket(bucket_name) 
+            blob = bucket.blob(blob_path)  
 
             # Only confirm completed if file exists
-            if not blob.exists():  # NEW
+            if not blob.exists():  
                 print("[DEBUG] File not yet in GCS, downgrading status to processing")  # NEW
-                return {"status": "processing"}  # NEW
+                return {"status": "processing"}  
 
         # Return status normally if idle, processing, or completed with file in GCS
         return {
@@ -278,7 +386,7 @@ async def upload_zip(file: UploadFile = File(...)):
     print(f"[INFO] Received file: {file.filename}")
     print(f"[INFO] Content type: {file.content_type}")
     print(f"[INFO] File size: {file.size if hasattr(file, 'size') else 'Unknown'}")
-    
+
     
     if not file.filename.endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed.")
@@ -336,8 +444,7 @@ async def upload_zip(file: UploadFile = File(...)):
                     forecast_file = excel_file
 
             if not forecast_file:
-                raise HTTPException(status_code=400, detail="Could not identify forecast file (core/allsku/sprout) from uploaded ZIP.")
-
+                raise HTTPException(status_code=400, detail="Could not identify forecast file (core/allsku/sprout) from uploaded ZIP")
             
              # DEBUG: Print what we're sending to VM
             print(" [BACKEND] Triggering forecast on VM with:")
@@ -346,7 +453,11 @@ async def upload_zip(file: UploadFile = File(...)):
             print(" - Amazon file:", az_file)
             print(" [DEBUG] Selected forecast_file:", forecast_file)
 
-        
+            # Ensure VM + Uvicorn ready
+            ready = start_vm_if_needed()   # Check readiness before forecast
+            if not ready:
+                return {"status": "error", "message": "VM/Uvicorn not ready"}  
+
             # Upload files to GCS (only once)
             gcs_core = upload_to_gcs(forecast_file, BUCKET_NAME)
             print(" [DEBUG] Uploaded forecast file to GCS as:", gcs_core)
@@ -482,8 +593,6 @@ async def test_gcs():
 #     """
 #     vm_url = os.getenv("FORECAST_VM_ENDPOINT", "http://34.135.50.176:8000/run-forecast")
     
- 
-
 
 #     # Test with a simple payload
 #     test_payload = {
