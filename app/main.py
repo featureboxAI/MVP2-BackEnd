@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse, FileResponse
 import google.auth, os, requests, tempfile, shutil, time, traceback, subprocess
+import threading
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from zipfile import ZipFile, BadZipFile
 from google.cloud import storage
@@ -15,6 +16,7 @@ from google.cloud import compute_v1
 from datetime import datetime 
 from google.cloud import storage   
 from google.api_core.exceptions import GoogleAPIError 
+from vm_gcs_client import download_blob 
 
 # Set Google Cloud credentials using relative path
 # current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -127,6 +129,24 @@ def start_vm_endpoint():
         print(f"[{datetime.now()}] VM/Uvicorn failed after {total_time:.2f} seconds")
         return {"status": "error", "message": "VM started but Uvicorn failed to respond"}
 
+def schedule_vm_stop_after_delay(minutes=10):
+    """Schedule VM to stop after specified delay"""
+    print(f"[INFO] VM will auto-stop in {minutes} minutes")
+    
+    stop_timer = threading.Timer(minutes * 60, stop_vm)
+    stop_timer.daemon = True  # Dies when main thread dies
+    stop_timer.start()
+
+def stop_vm():
+    """Stop the VM instance using Compute API"""
+    try:
+        print("[INFO] Auto-stopping VM now...")
+        client = compute_v1.InstancesClient()
+        operation = client.stop(project=PROJECT_ID, zone=ZONE, instance=INSTANCE_NAME)
+        operation.result()  # Wait for completion
+        print("[INFO] VM stopped successfully")
+    except Exception as e:
+        print(f"[ERROR] Failed to stop VM: {e}")
 
 VM_STATUS_URL = "http://34.135.50.176:8000/status" 
 # VM_STATUS_URL = "http://34.135.50.176:8002/status" #local testing
@@ -173,6 +193,10 @@ async def forecast_complete(request: Request):
         # Update internal status
         forecast_status_store["status"] = data.get("status", "completed")
         forecast_status_store["forecast_gcs"] = data.get("forecast_gcs")
+
+        # 10-minute timer to stop VM
+        print("[INFO] Starting 10-minute timer to auto-stop VM...")
+        schedule_vm_stop_after_delay(minutes=10)
         return {"status": "received"}
     
     except Exception as e:
@@ -249,7 +273,7 @@ async def download_forecast():
         bucket = client.bucket(bucket_name)
         blob = bucket.blob(blob_path)
 
-        # Wait until file exists in GCS before downloading
+        # 4. Wait until file exists in GCS before downloading
         max_retries = 5  
         retry_delay = 2  
         for attempt in range(max_retries): 
@@ -262,19 +286,27 @@ async def download_forecast():
         else:  
             raise HTTPException(status_code=404, detail="Forecast file not yet available in GCS")
           
-        # 4. Download file to Cloud Run temporary storage (/tmp)
-        temp_file_path = f"/tmp/{os.path.basename(blob_path)}"
-        blob.download_to_filename(temp_file_path)
-        print(f"[DEBUG] Downloaded forecast file from GCS: {forecast_file_gcs}")
+         # 5. Stream directly from GCS (no /tmp download)
+        print(f"[DEBUG] Streaming forecast file directly from GCS: {forecast_file_gcs}")
+        data = blob.download_as_bytes()
+        filename = os.path.basename(blob_path)
+        
+        headers = {
+            "Content-Disposition": f"attachment; filename=\"{filename}\""
+        }
 
         # Reset status so next forecast starts clean
-        forecast_status_store["status"] = "idle"
-        forecast_status_store["forecast_gcs"] = None
-        print("[DEBUG] Status reset to idle after download")
+        # forecast_status_store["status"] = "idle"
+        # forecast_status_store["forecast_gcs"] = None
+        # print("[DEBUG] Status reset to idle after download")
 
-        # 5. Send file to UI as HTTP FileResponse
-        return FileResponse(temp_file_path, filename=os.path.basename(blob_path))
-
+        # 6. Stream directly to user's browser
+        return StreamingResponse(
+            BytesIO(data),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers=headers
+        )
+    
     except Exception as e:
         print(f"[ERROR] Failed to download forecast: {e}")
         return {"status": "error", "message": str(e)}
@@ -305,7 +337,7 @@ def upload_to_gcs(file_path: str, bucket_name=BUCKET_NAME) -> str:
     
         bucket = client.bucket(bucket_name)
         
-        blob_name = f"excel_uploads/{os.path.basename(file_path)}"
+        blob_name = f"HP_uploads/{os.path.basename(file_path)}"
         blob = bucket.blob(blob_name)
         blob.upload_from_filename(file_path) #Upload the local file from Cloud Run's /tmp to the bucket location
 

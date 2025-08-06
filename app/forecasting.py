@@ -625,11 +625,11 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
                 exog_series[(sheet_name, item)] = (ts_orig, ts_cons)
 
     #=== Limited SKUs for testing ===
-    # def _limit_dict(orig_dict, n=10):
-    #     return dict(list(orig_dict.items())[:n])
+    def _limit_dict(orig_dict, n=5):
+        return dict(list(orig_dict.items())[:n])
 
-    # non_exog_series = _limit_dict(non_exog_series, n=10)
-    # exog_series = _limit_dict(exog_series, n=10)
+    non_exog_series = _limit_dict(non_exog_series, n=5)
+    exog_series = _limit_dict(exog_series, n=5)
     # ─────────────────────────────────────────────
     # Run non-exog and exog forecast drivers
     # ─────────────────────────────────────────────
@@ -665,7 +665,7 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
     # Save to timestamped Excel file
     # ─────────────────────────────────────────────
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") 
-    output_path = Path(f"combined_results_{timestamp}.xlsx")  # timestamped file
+    output_path = Path(f"HP_forecast_results_{timestamp}.xlsx")  # timestamped file
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         forecasts.to_excel(writer, sheet_name="forecast", index=False)
