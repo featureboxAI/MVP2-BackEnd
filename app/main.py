@@ -16,7 +16,6 @@ from google.cloud import compute_v1
 from datetime import datetime 
 from google.cloud import storage   
 from google.api_core.exceptions import GoogleAPIError 
-from vm_gcs_client import download_blob 
 
 # Set Google Cloud credentials using relative path
 # current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -129,24 +128,24 @@ def start_vm_endpoint():
         print(f"[{datetime.now()}] VM/Uvicorn failed after {total_time:.2f} seconds")
         return {"status": "error", "message": "VM started but Uvicorn failed to respond"}
 
-def schedule_vm_stop_after_delay(minutes=10):
-    """Schedule VM to stop after specified delay"""
-    print(f"[INFO] VM will auto-stop in {minutes} minutes")
+# def schedule_vm_stop_after_delay(minutes=10):
+#     """Schedule VM to stop after specified delay"""
+#     print(f"[INFO] VM will auto-stop in {minutes} minutes")
     
-    stop_timer = threading.Timer(minutes * 60, stop_vm)
-    stop_timer.daemon = True  # Dies when main thread dies
-    stop_timer.start()
+#     stop_timer = threading.Timer(minutes * 60, stop_vm)
+#     stop_timer.daemon = True  # Dies when main thread dies
+#     stop_timer.start()
 
-def stop_vm():
-    """Stop the VM instance using Compute API"""
-    try:
-        print("[INFO] Auto-stopping VM now...")
-        client = compute_v1.InstancesClient()
-        operation = client.stop(project=PROJECT_ID, zone=ZONE, instance=INSTANCE_NAME)
-        operation.result()  # Wait for completion
-        print("[INFO] VM stopped successfully")
-    except Exception as e:
-        print(f"[ERROR] Failed to stop VM: {e}")
+# def stop_vm():
+#     """Stop the VM instance using Compute API"""
+#     try:
+#         print("[INFO] Auto-stopping VM now...")
+#         client = compute_v1.InstancesClient()
+#         operation = client.stop(project=PROJECT_ID, zone=ZONE, instance=INSTANCE_NAME)
+#         operation.result()  # Wait for completion
+#         print("[INFO] VM stopped successfully")
+#     except Exception as e:
+#         print(f"[ERROR] Failed to stop VM: {e}")
 
 VM_STATUS_URL = "http://34.135.50.176:8000/status" 
 # VM_STATUS_URL = "http://34.135.50.176:8002/status" #local testing
@@ -196,7 +195,7 @@ async def forecast_complete(request: Request):
 
         # 10-minute timer to stop VM
         print("[INFO] Starting 10-minute timer to auto-stop VM...")
-        schedule_vm_stop_after_delay(minutes=10)
+        # schedule_vm_stop_after_delay(minutes=10)
         return {"status": "received"}
     
     except Exception as e:
@@ -585,7 +584,7 @@ async def health_check():
         "service": "featurebox-ai-backend"
     }
 
-@app.get("/whoami")  # NEW: Debug endpoint
+@app.get("/whoami") 
 async def whoami():
     """
     Returns Cloud Run's service account and project ID.
