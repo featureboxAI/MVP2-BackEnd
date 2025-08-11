@@ -987,54 +987,10 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
 
 
     # ─────────────────────────────────────────────
-    # Upload to GCS and send webhook notification
+    # File generation completed - VM will handle GCS upload and webhook
     # ─────────────────────────────────────────────
-    try:
-        from google.cloud import storage
-        import requests
-        
-        # Upload forecast file to GCS
-        BUCKET_NAME = "featurebox-ai-uploads"
-        client = storage.Client()
-        bucket = client.bucket(BUCKET_NAME)
-        
-        # Upload to excel_uploads folder 
-        gcs_blob_name = f"excel_uploads/{output_path.name}"
-        blob = bucket.blob(gcs_blob_name)
-        
-        print(f"[DEBUG] Uploading forecast file to GCS: gs://{BUCKET_NAME}/{gcs_blob_name}")
-        blob.upload_from_filename(str(output_path))
-        
-        # Verify upload succeeded by checking file exists
-        upload_verified = blob.exists()
-        print(f"[DEBUG] Upload verification: {upload_verified}")
-        
-        if upload_verified:
-            # Construct GCS URI
-            gcs_uri = f"gs://{BUCKET_NAME}/{gcs_blob_name}"
-            print(f"[DEBUG] File successfully uploaded to: {gcs_uri}")
-            
-            # Send webhook notification to Cloud Run backend
-            webhook_url = "https://featurebox-ai-backend-service-666676702816.us-west1.run.app/forecast-complete"
-            webhook_payload = {
-                "status": "completed",
-                "forecast_gcs": gcs_uri
-            }
-            
-            print(f"[DEBUG] Sending webhook to: {webhook_url}")
-            print(f"[DEBUG] Webhook payload: {webhook_payload}")
-            
-            try:
-                response = requests.post(webhook_url, json=webhook_payload, timeout=30)
-                print(f"[DEBUG] Webhook response: {response.status_code} - {response.text}")
-            except Exception as webhook_err:
-                print(f"[ERROR] Failed to send webhook: {webhook_err}")
-            
-        else:
-            print("[ERROR] GCS upload verification failed - file not found after upload")
-            
-    except Exception as upload_err:
-        print(f"[ERROR] Failed to upload forecast to GCS: {upload_err}")
+    print(f"[DEBUG] Forecast file generated locally: {output_path}")
+    print("[DEBUG] VM server will handle GCS upload and webhook notification")
     
     # ─────────────────────────────────────────────
     # Return a summary dictionary  
