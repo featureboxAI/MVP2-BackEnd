@@ -90,6 +90,12 @@ def fit_holt_winters(train, test):
         last_value = train.dropna().iloc[-1] if len(train.dropna()) > 0 else 0
         return pd.Series(naive_forecast(last_value, len(test)), index=test.index), np.inf
     
+    elif quality_status == 'proceed':
+        print(f"[HW_PROCEED] Quality check passed: {reason}")
+    else:
+        print(f"[HW_WARNING] Unexpected quality status: {quality_status}")
+    
+    
     # Safety check: ensure sufficient data for seasonal modeling
     train_clean = train.dropna()
     if len(train_clean) < 24:
@@ -233,26 +239,23 @@ def fit_prophet(train, test):
         print(f"[PROPHET_ERROR] {str(e)}")
         last_value = train.dropna().iloc[-1] if len(train.dropna()) > 0 else 0
         return pd.Series(naive_forecast(last_value, len(test)), index=test.index), np.inf
-
-def fit_random_forest(X_train, y_train, X_test, test_index):
+#new
+def fit_random_forest(X_train, y_train, X_test, test_index, y_test=None):
     # Data validation checks
     if len(X_train) == 0 or len(X_test) == 0:
         print("[RF_SKIP] Empty training or test data")
         return pd.Series(naive_forecast(0, len(test_index)), index=test_index), np.inf
-    
-    # Check for sufficient training data for cross-validation
-    if len(X_train) < 6:  # Need minimum for 3-fold CV
+
+    if len(X_train) < 6:
         print("[RF_SKIP] Insufficient training data for cross-validation (< 6 samples)")
         last_value = y_train[-1] if len(y_train) > 0 else 0
         return pd.Series(naive_forecast(last_value, len(test_index)), index=test_index), np.inf
-    
-    # Check for NaN values
-    if np.isnan(X_train).any() or np.isnan(y_train).any() or np.isnan(X_test).any():
+
+    if pd.isnull(X_train).any() or pd.isnull(y_train).any() or pd.isnull(X_test).any():
         print("[RF_SKIP] NaN values detected in data")
         last_value = y_train[-1] if len(y_train) > 0 else 0
         return pd.Series(naive_forecast(last_value, len(test_index)), index=test_index), np.inf
-    
-    # Grid search over specified RF hyperparameters
+
     try:
         param_grid = {
             'n_estimators': [50, 100, 200],
@@ -262,12 +265,53 @@ def fit_random_forest(X_train, y_train, X_test, test_index):
         grid = GridSearchCV(RandomForestRegressor(random_state=0), param_grid, cv=3, n_jobs=-1)
         grid.fit(X_train, y_train)
         pred = grid.predict(X_test)
-        return pd.Series(pred, index=test_index), nrmse(y_train, y_train)
-
+        if y_test is not None:
+            metric = nrmse(y_test, pred)
+        else:
+            metric = np.nan
+        return pd.Series(pred, index=test_index), metric
     except Exception as e:
         print(f"[RF_ERROR] {str(e)}")
         last_value = y_train[-1] if len(y_train) > 0 else 0
         return pd.Series(naive_forecast(last_value, len(test_index)), index=test_index), np.inf
+
+
+#old
+# def fit_random_forest(X_train, y_train, X_test, test_index):
+
+#     # Data validation checks
+#     if len(X_train) == 0 or len(X_test) == 0:
+#         print("[RF_SKIP] Empty training or test data")
+#         return pd.Series(naive_forecast(0, len(test_index)), index=test_index), np.inf
+    
+#     # Check for sufficient training data for cross-validation
+#     if len(X_train) < 6:  # Need minimum for 3-fold CV
+#         print("[RF_SKIP] Insufficient training data for cross-validation (< 6 samples)")
+#         last_value = y_train[-1] if len(y_train) > 0 else 0
+#         return pd.Series(naive_forecast(last_value, len(test_index)), index=test_index), np.inf
+    
+#     # Check for NaN values
+#     if np.isnan(X_train).any() or np.isnan(y_train).any() or np.isnan(X_test).any():
+#         print("[RF_SKIP] NaN values detected in data")
+#         last_value = y_train[-1] if len(y_train) > 0 else 0
+#         return pd.Series(naive_forecast(last_value, len(test_index)), index=test_index), np.inf
+    
+#     # Grid search over specified RF hyperparameters
+#     try:
+#         param_grid = {
+#             'n_estimators': [50, 100, 200],
+#             'max_depth': [5, 10, 20],
+#             'min_samples_leaf': [1, 2, 4]
+#         }
+#         grid = GridSearchCV(RandomForestRegressor(random_state=0), param_grid, cv=3, n_jobs=-1)
+#         grid.fit(X_train, y_train)
+#         pred = grid.predict(X_test)
+#         return pd.Series(pred, index=test_index), nrmse(y_test, pred)
+
+#     except Exception as e:
+#         print(f"[RF_ERROR] {str(e)}")
+#         last_value = y_train[-1] if len(y_train) > 0 else 0
+#         return pd.Series(naive_forecast(last_value, len(test_index)), index=test_index), np.inf
 
 def fit_gradient_boost(X_train, y_train, X_test, test_index):
     #Data validation checks
@@ -471,12 +515,6 @@ def run_non_exog_driver(series_dict):
         
             ts = series_dict[(sheet, item)]
             # ts = ts["2018-01-01":"2025-05-01"]
-
-            # Quality check 
-            quality_status, reason = assess_sku_quality(ts)
-            if quality_status == 'generate_fallback':
-                print(f"[FALLBACK_OK] {sheet}-{item}: {reason}")
-    
             ts = ts.dropna()                      # remove NaN months
             ts = ts.asfreq('MS')                  # ensure monthly frequency
             ts = ts.fillna(method='ffill').fillna(0) 
@@ -484,6 +522,13 @@ def run_non_exog_driver(series_dict):
             if ts.empty:
                 print(f"[WARN] Skipping {sheet}-{item}: No valid data")
                 continue
+
+            # Quality check 
+            quality_status, reason = assess_sku_quality(ts)
+            if quality_status == 'generate_fallback':
+                print(f"[FALLBACK_OK] {sheet}-{item}: {reason}")
+
+                
             # ── Train/test split dynamically
             split = int(len(ts) * 0.8)
             train, test = ts.iloc[:split], ts.iloc[split:]
@@ -567,7 +612,7 @@ def run_non_exog_driver(series_dict):
             # full-series forecast
             try:
                 if best == 'arima':
-                    m = auto_arima(ts, seasonal=True, m=12, stepwise=True, n_jobs=-1)
+                    m = auto_arima(ts, seasonal=False, m=12, stepwise=True, n_jobs=-1)
                     fc = pd.Series(m.predict(n_periods=12), index=fut_idx)
 
                 # elif best == 'hw':
@@ -806,6 +851,7 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
     if cons_path:
         print("[DEBUG] Loading consumption Excel file...")
         df_cons = pd.read_excel(cons_path, sheet_name=None)
+        df_cons = {k.strip().upper(): v for k, v in df_cons.items()}
         print(f"[DEBUG] Loaded {len(df_cons)} sheets from consumption Excel")
 
     #Amazon consumption file
@@ -851,138 +897,154 @@ def generate_forecasts(filepath: str, cons_path: str = None, az_path: str = None
             try:
                 ts_orig = row.dropna().asfreq('MS').fillna(method='ffill').fillna(0)
 
-                # Quality check for original series
-                quality_status, reason = assess_sku_quality(ts_orig)
-                if quality_status == 'generate_fallback':
-                    print(f"[FALLBACK_OK] {sheet_name}-{item}: {reason}")
-
                 if df_c is None or item not in df_c.index:
                     non_exog_series[(sheet_name, item)] = ts_orig
                     
                 else:
                     ts_cons = df_c.loc[item].dropna().asfreq('MS')
-                
-                    # Quality check for consumption series
-                    cons_quality_status, cons_reason = assess_sku_quality(ts_cons)
-                    if cons_quality_status == 'generate_fallback':
-                        print(f"[SKIP] {sheet_name}-{item} consumption: {cons_reason}")
-                        # Add to non-exog instead since consumption is not usable
-                        non_exog_series[(sheet_name, item)] = ts_orig
-                    else:
-                        exog_series[(sheet_name, item)] = (ts_orig, ts_cons)
+                    exog_series[(sheet_name, item)] = (ts_orig, ts_cons)
             
             except Exception as e:
                 print(f"[ERROR] Failed processing {sheet_name}-{item}: {str(e)}")
                 continue
 
-        # #=== Limited SKUs for testing ===
-        # def _limit_dict(orig_dict, n=5):
-        #     return dict(list(orig_dict.items())[:n])
+    # Quick debug: prove we have many sheets/items in dicts
+    print("[DEBUG] total non-exog series:", len(non_exog_series))
+    print("[DEBUG] total exog series    :", len(exog_series))
+    print("[DEBUG] sheets in non-exog   :", sorted({s for (s, _) in non_exog_series.keys()}))
+    print("[DEBUG] sheets in exog       :", sorted({s for (s, _) in exog_series.keys()}))
 
-        # non_exog_series = _limit_dict(non_exog_series, n=5)
-        # exog_series = _limit_dict(exog_series, n=5)
+    # #=== Limited SKUs for testing ===
+    # def _limit_dict(orig_dict, n=5):
+    #     return dict(list(orig_dict.items())[:n])
 
-        # ─────────────────────────────────────────────
-        # Run non-exog and exog forecast drivers
-        # ─────────────────────────────────────────────
-        print(f"[DEBUG] Loaded {len(df_core)} core sheets")
-        print(f"[DEBUG] Prepared {len(non_exog_series)} non-exog series")
-        print(f"[DEBUG] Prepared {len(exog_series)} exog series")
+    # non_exog_series = _limit_dict(non_exog_series, n=5)
+    # exog_series = _limit_dict(exog_series, n=5)
 
-        # non_metrics, non_forecasts, _ = run_non_exog_driver(non_exog_series) 
-        # ex_metrics, ex_forecasts, _ = run_exog_driver(exog_series)
+    # ─────────────────────────────────────────────
+    # Run non-exog and exog forecast drivers
+    # ─────────────────────────────────────────────
+    # print(f"[DEBUG] Loaded {len(df_core)} core sheets")
+    # print(f"[DEBUG] Prepared {len(non_exog_series)} non-exog series")
+    # print(f"[DEBUG] Prepared {len(exog_series)} exog series")
 
-        non_metrics, non_forecasts = pd.DataFrame(), pd.DataFrame()
-        ex_metrics, ex_forecasts = pd.DataFrame(), pd.DataFrame()
+    non_metrics, non_forecasts, _ = run_non_exog_driver(non_exog_series) 
+    ex_metrics, ex_forecasts, _ = run_exog_driver(exog_series)
 
-        try:
-            if non_exog_series:
-                print("[INFO] Running non-exogenous models...")
-                non_metrics, non_forecasts, _ = run_non_exog_driver(non_exog_series)
-                print(f"[SUCCESS] Non-exog completed: {len(non_metrics)} results")
-            else:
-                print("[WARNING] No valid non-exogenous series to process")
-                
-        except Exception as e:
-            print(f"[ERROR] Non-exogenous driver failed: {str(e)}")
-            # Variables already initialized to empty DataFrames above
+# Combine outputs (handle empty DataFrames)
+    if not non_metrics.empty and not ex_metrics.empty:
+        metrics = pd.concat([non_metrics, ex_metrics], ignore_index=True)
+    elif not non_metrics.empty:
+        metrics = non_metrics
+    elif not ex_metrics.empty:
+        metrics = ex_metrics
+    else:
+        # Create empty metrics DataFrame with expected columns
+        metrics = pd.DataFrame(columns=['sheet', 'item', 'bucket', 'model', 'nrmse', 'smape'])
 
-        try:
-            if exog_series:
-                print("[INFO] Running exogenous models...")
-                ex_metrics, ex_forecasts, _ = run_exog_driver(exog_series)
-                print(f"[SUCCESS] Exog completed: {len(ex_metrics)} results")
-            else:
-                print("[WARNING] No valid exogenous series to process")
-        except Exception as e:
-            print(f"[ERROR] Exogenous driver failed: {str(e)}")
+    if not non_forecasts.empty and not ex_forecasts.empty:
+        forecasts = pd.concat([non_forecasts, ex_forecasts], ignore_index=True)
+    elif not non_forecasts.empty:
+        forecasts = non_forecasts
+    elif not ex_forecasts.empty:
+        forecasts = ex_forecasts
+    else:
+        # Create empty forecasts DataFrame with expected columns
+        forecasts = pd.DataFrame(columns=['sheet', 'item', 'bucket', 'model', 'ds', 'forecast'])
 
-        # Combine outputs (handle empty DataFrames)
-        if not non_metrics.empty and not ex_metrics.empty:
-            metrics = pd.concat([non_metrics, ex_metrics], ignore_index=True)
-        elif not non_metrics.empty:
-            metrics = non_metrics
-        elif not ex_metrics.empty:
-            metrics = ex_metrics
-        else:
-            # Create empty metrics DataFrame with expected columns
-            metrics = pd.DataFrame(columns=['sheet', 'item', 'bucket', 'model', 'nrmse', 'smape'])
-
-        if not non_forecasts.empty and not ex_forecasts.empty:
-            forecasts = pd.concat([non_forecasts, ex_forecasts], ignore_index=True)
-        elif not non_forecasts.empty:
-            forecasts = non_forecasts
-        elif not ex_forecasts.empty:
-            forecasts = ex_forecasts
-        else:
-            # Create empty forecasts DataFrame with expected columns
-            forecasts = pd.DataFrame(columns=['sheet', 'item', 'bucket', 'model', 'ds', 'forecast'])
-
-                # # Combine outputs
-                # metrics = pd.concat([non_metrics, ex_metrics], ignore_index=True)
-                # forecasts = pd.concat([non_forecasts, ex_forecasts], ignore_index=True)
-
-        # Ensure ds is datetime
+    # Ensure ds is datetime if we have rows
+    if not forecasts.empty:
         forecasts['ds'] = pd.to_datetime(forecasts['ds'])
             
-        # Build historic value mapping from original time series data
-        historic_value_map = {}
+    # Build historic value mapping from original time series data
+    historic_value_map = {}
 
-        # Get last values from non-exog series
-        for (sheet, item), ts in non_exog_series.items():
-            last_val = ts.dropna().iloc[-1] if len(ts.dropna()) > 0 else 0
-            historic_value_map[(sheet, item, 'non_exog')] = last_val
+    # Get last values from non-exog series
+    for (sheet, item), ts in non_exog_series.items():
+        last_val = ts.dropna().iloc[-1] if len(ts.dropna()) > 0 else 0
+        historic_value_map[(sheet, item, 'non_exog')] = last_val
 
-        # Get last values from exog series  
-        for (sheet, item), (ts_orig, _) in exog_series.items():
-            last_val = ts_orig.dropna().iloc[-1] if len(ts_orig.dropna()) > 0 else 0
-            historic_value_map[(sheet, item, 'exog')] = last_val
+    # Get last values from exog series  
+    for (sheet, item), (ts_orig, _) in exog_series.items():
+        last_val = ts_orig.dropna().iloc[-1] if len(ts_orig.dropna()) > 0 else 0
+        historic_value_map[(sheet, item, 'exog')] = last_val
 
-        # Apply to forecasts
-        forecasts['historic_value'] = forecasts.apply(
-                    lambda r: historic_value_map.get((r['sheet'], r['item'], r['bucket']), 0), 
-                    axis=1
-                )
+    # Apply to forecasts
+    forecasts['historic_value'] = forecasts.apply(
+                lambda r: historic_value_map.get((r['sheet'], r['item'], r['bucket']), 0), 
+                axis=1
+            )
                 
-        # ─────────────────────────────────────────────
-        # Save to timestamped Excel file
-        # ─────────────────────────────────────────────
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") 
-        output_path = Path(f"HP_forecast_results_{timestamp}.xlsx")  # timestamped file
+    # ─────────────────────────────────────────────
+    # Save to timestamped Excel file
+    # ─────────────────────────────────────────────
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") 
+    output_path = Path(f"HP_forecast_results_{timestamp}.xlsx")  # timestamped file
 
-        with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-            forecasts.to_excel(writer, sheet_name="forecast", index=False)
-            metrics.to_excel(writer, sheet_name="Metrics", index=False)
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        forecasts.to_excel(writer, sheet_name="forecast", index=False)
+        metrics.to_excel(writer, sheet_name="Metrics", index=False)
 
-        # ─────────────────────────────────────────────
-        # Return a summary dictionary
-        # ─────────────────────────────────────────────
-        return {
-                    "status": "success",
-                    "forecast_file": str(output_path.resolve()),  # full path for download
-                    "message": f"Forecasts generated for {metrics['item'].nunique()} SKUs",
-                    "metrics_shape": metrics.shape,
-                    "forecast_shape": forecasts.shape
-                    }
+
+    # ─────────────────────────────────────────────
+    # Upload to GCS and send webhook notification
+    # ─────────────────────────────────────────────
+    try:
+        from google.cloud import storage
+        import requests
+        
+        # Upload forecast file to GCS
+        BUCKET_NAME = "featurebox-ai-uploads"
+        client = storage.Client()
+        bucket = client.bucket(BUCKET_NAME)
+        
+        # Upload to excel_uploads folder 
+        gcs_blob_name = f"excel_uploads/{output_path.name}"
+        blob = bucket.blob(gcs_blob_name)
+        
+        print(f"[DEBUG] Uploading forecast file to GCS: gs://{BUCKET_NAME}/{gcs_blob_name}")
+        blob.upload_from_filename(str(output_path))
+        
+        # Verify upload succeeded by checking file exists
+        upload_verified = blob.exists()
+        print(f"[DEBUG] Upload verification: {upload_verified}")
+        
+        if upload_verified:
+            # Construct GCS URI
+            gcs_uri = f"gs://{BUCKET_NAME}/{gcs_blob_name}"
+            print(f"[DEBUG] File successfully uploaded to: {gcs_uri}")
+            
+            # Send webhook notification to Cloud Run backend
+            webhook_url = "https://featurebox-ai-backend-service-666676702816.us-west1.run.app/forecast-complete"
+            webhook_payload = {
+                "status": "completed",
+                "forecast_gcs": gcs_uri
+            }
+            
+            print(f"[DEBUG] Sending webhook to: {webhook_url}")
+            print(f"[DEBUG] Webhook payload: {webhook_payload}")
+            
+            try:
+                response = requests.post(webhook_url, json=webhook_payload, timeout=30)
+                print(f"[DEBUG] Webhook response: {response.status_code} - {response.text}")
+            except Exception as webhook_err:
+                print(f"[ERROR] Failed to send webhook: {webhook_err}")
+            
+        else:
+            print("[ERROR] GCS upload verification failed - file not found after upload")
+            
+    except Exception as upload_err:
+        print(f"[ERROR] Failed to upload forecast to GCS: {upload_err}")
+    
+    # ─────────────────────────────────────────────
+    # Return a summary dictionary  
+    # ─────────────────────────────────────────────
+    return {
+                "status": "success",
+                "forecast_file": str(output_path.resolve()),  # full path for download
+                "message": f"Forecasts generated for {metrics['item'].nunique()} SKUs",
+                "metrics_shape": metrics.shape,
+                "forecast_shape": forecasts.shape
+                }
                 
             

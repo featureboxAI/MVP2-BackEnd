@@ -15,7 +15,8 @@ from urllib.parse import quote_plus
 from google.cloud import compute_v1
 from datetime import datetime 
 from google.cloud import storage   
-from google.api_core.exceptions import GoogleAPIError 
+from google.api_core.exceptions import GoogleAPIError
+import time 
 
 # Set Google Cloud credentials using relative path
 # current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -152,7 +153,7 @@ VM_STATUS_URL = "http://34.135.50.176:8000/status"
 BUCKET_NAME = "featurebox-ai-uploads"
 
 # Forecast status store (idle | running | completed | error)
-forecast_status_store = {"status": "idle", "forecast_gcs": None}     
+forecast_status_store = {"status": "idle", "forecast_gcs": None, "webhook_time": None}     
 
 # CORS CONFIGURATION
 origins = [
@@ -192,6 +193,7 @@ async def forecast_complete(request: Request):
         # Update internal status
         forecast_status_store["status"] = data.get("status", "completed")
         forecast_status_store["forecast_gcs"] = data.get("forecast_gcs")
+        forecast_status_store["webhook_time"] = time.time()
 
         # 10-minute timer to stop VM
         print("[INFO] Starting 10-minute timer to auto-stop VM...")
@@ -216,6 +218,7 @@ async def get_status():
 
         # 2.Get forecast file path from store (just for GCS path)
         forecast_file_gcs = forecast_status_store.get("forecast_gcs")
+        webhook_time = forecast_status_store.get("webhook_time")
 
         # Check GCS only if VM is running
         if vm_status == "RUNNING" and forecast_file_gcs:
@@ -226,10 +229,45 @@ async def get_status():
             bucket = client.bucket(bucket_name)
             blob = bucket.blob(blob_path)
 
-            if blob.exists():
+            print(f"[DEBUG] Checking GCS file existence:")
+            print(f"[DEBUG] Bucket: {bucket_name}")
+            print(f"[DEBUG] Blob path: {blob_path}")
+            print(f"[DEBUG] Full GCS URI: gs://{bucket_name}/{blob_path}")
+            
+            # Check if file exists with retry logic for recent webhooks
+            file_exists = blob.exists()
+            print(f"[DEBUG] File exists: {file_exists}")
+            
+            if file_exists:
                 forecast_status = "completed"
             else:
-                forecast_status = "running"
+                # If webhook was recent (< 5 minutes), give more time for GCS upload
+                current_time = time.time()
+                if webhook_time and (current_time - webhook_time) < 300:  # 5 minutes
+                    print(f"[DEBUG] Webhook was recent ({(current_time - webhook_time):.1f}s ago), file might still be uploading")
+                    # Try a few more times with small delays
+                    for attempt in range(3):
+                        print(f"[DEBUG] Retry attempt {attempt + 1}/3 after 2s delay")
+                        time.sleep(2)
+                        if blob.exists():
+                            print(f"[DEBUG] File found on retry attempt {attempt + 1}")
+                            file_exists = True
+                            break
+                    
+                    if file_exists:
+                        forecast_status = "completed"
+                    else:
+                        print(f"[DEBUG] File still not found after retries, checking directory contents")
+                        # List files in the directory to see what's actually there
+                        try:
+                            blobs = list(client.bucket(bucket_name).list_blobs(prefix="excel_uploads/", max_results=10))
+                            print(f"[DEBUG] Recent files in excel_uploads/: {[b.name for b in blobs]}")
+                        except Exception as list_err:
+                            print(f"[DEBUG] Error listing directory: {list_err}")
+                        forecast_status = "running"
+                else:
+                    print(f"[DEBUG] Webhook was not recent or missing, file should exist by now")
+                    forecast_status = "running"
         elif vm_status == "RUNNING":
             forecast_status = "running"
         else:
@@ -447,6 +485,7 @@ async def upload_zip(file: UploadFile = File(...)):
 
     forecast_status_store["status"] = "running"   # Update status
     forecast_status_store["forecast_gcs"] = None
+    forecast_status_store["webhook_time"] = None  # Reset webhook time
 
     try:
             print(f"[INFO] Saving uploaded file to temporary location")
