@@ -196,7 +196,7 @@ async def forecast_complete(request: Request):
         forecast_status_store["webhook_time"] = time.time()
 
         # 10-minute timer to stop VM
-        print("[INFO] Starting 10-minute timer to auto-stop VM...")
+        # print("[INFO] Starting 10-minute timer to auto-stop VM...")
         # schedule_vm_stop_after_delay(minutes=10)
         return {"status": "received"}
     
@@ -218,56 +218,61 @@ async def get_status():
 
         # 2.Get forecast file path from store (just for GCS path)
         forecast_file_gcs = forecast_status_store.get("forecast_gcs")
-        webhook_time = forecast_status_store.get("webhook_time")
+        # webhook_time = forecast_status_store.get("webhook_time")
 
         # Check GCS only if VM is running
         if vm_status == "RUNNING" and forecast_file_gcs:
-            bucket_name = forecast_file_gcs.split("/")[2]
-            blob_path = "/".join(forecast_file_gcs.split("/")[3:])
-            
-            client = storage.Client()
-            bucket = client.bucket(bucket_name)
-            blob = bucket.blob(blob_path)
+            forecast_status = "completed"
 
-            print(f"[DEBUG] Checking GCS file existence:")
-            print(f"[DEBUG] Bucket: {bucket_name}")
-            print(f"[DEBUG] Blob path: {blob_path}")
-            print(f"[DEBUG] Full GCS URI: gs://{bucket_name}/{blob_path}")
             
-            # Check if file exists with retry logic for recent webhooks
-            file_exists = blob.exists()
-            print(f"[DEBUG] File exists: {file_exists}")
+            #redundant
+            # bucket_name = forecast_file_gcs.split("/")[2]
+            # blob_path = "/".join(forecast_file_gcs.split("/")[3:])
             
-            if file_exists:
-                forecast_status = "completed"
-            else:
-                # If webhook was recent (< 5 minutes), give more time for GCS upload
-                current_time = time.time()
-                if webhook_time and (current_time - webhook_time) < 300:  # 5 minutes
-                    print(f"[DEBUG] Webhook was recent ({(current_time - webhook_time):.1f}s ago), file might still be uploading")
-                    # Try a few more times with small delays
-                    for attempt in range(3):
-                        print(f"[DEBUG] Retry attempt {attempt + 1}/3 after 2s delay")
-                        time.sleep(2)
-                        if blob.exists():
-                            print(f"[DEBUG] File found on retry attempt {attempt + 1}")
-                            file_exists = True
-                            break
+            # client = storage.Client()
+            # bucket = client.bucket(bucket_name)
+            # blob = bucket.blob(blob_path)
+
+            # print(f"[DEBUG] Checking GCS file existence:")
+            # print(f"[DEBUG] Bucket: {bucket_name}")
+            # print(f"[DEBUG] Blob path: {blob_path}")
+            # print(f"[DEBUG] Full GCS URI: gs://{bucket_name}/{blob_path}")
+            
+            # # Check if file exists with retry logic for recent webhooks
+            # file_exists = blob.exists()
+            # print(f"[DEBUG] File exists: {file_exists}")
+            
+            # if file_exists:
+            #     forecast_status = "completed"
+            # else:
+            #     # If webhook was recent (< 5 minutes), give more time for GCS upload
+            #     current_time = time.time()
+            #     if webhook_time and (current_time - webhook_time) < 300:  # 5 minutes
+            #         print(f"[DEBUG] Webhook was recent ({(current_time - webhook_time):.1f}s ago), file might still be uploading")
+            #         # Try a few more times with small delays
+            #         for attempt in range(3):
+            #             print(f"[DEBUG] Retry attempt {attempt + 1}/3 after 2s delay")
+            #             time.sleep(2)
+            #             if blob.exists():
+            #                 print(f"[DEBUG] File found on retry attempt {attempt + 1}")
+            #                 file_exists = True
+            #                 break
                     
-                    if file_exists:
-                        forecast_status = "completed"
-                    else:
-                        print(f"[DEBUG] File still not found after retries, checking directory contents")
-                        # List files in the directory to see what's actually there
-                        try:
-                            blobs = list(client.bucket(bucket_name).list_blobs(prefix="excel_uploads/", max_results=10))
-                            print(f"[DEBUG] Recent files in excel_uploads/: {[b.name for b in blobs]}")
-                        except Exception as list_err:
-                            print(f"[DEBUG] Error listing directory: {list_err}")
-                        forecast_status = "running"
-                else:
-                    print(f"[DEBUG] Webhook was not recent or missing, file should exist by now")
-                    forecast_status = "running"
+            #         if file_exists:
+            #             forecast_status = "completed"
+            #         else:
+                #         print(f"[DEBUG] File still not found after retries, checking directory contents")
+                #         # List files in the directory to see what's actually there
+                #         try:
+                #             blobs = list(client.bucket(bucket_name).list_blobs(prefix="excel_uploads/", max_results=10))
+                #             print(f"[DEBUG] Recent files in excel_uploads/: {[b.name for b in blobs]}")
+                #         except Exception as list_err:
+                #             print(f"[DEBUG] Error listing directory: {list_err}")
+                #         forecast_status = "running"
+                # else:
+                #     print(f"[DEBUG] Webhook was not recent or missing, file should exist by now")
+                #     forecast_status = "running"
+        
         elif vm_status == "RUNNING":
             forecast_status = "running"
         else:
@@ -310,18 +315,18 @@ async def download_forecast():
         bucket = client.bucket(bucket_name)
         blob = bucket.blob(blob_path)
 
-        # 4. Wait until file exists in GCS before downloading
-        max_retries = 5  
-        retry_delay = 2  
-        for attempt in range(max_retries): 
-            if blob.exists(): 
-                print(f"[DEBUG] File found in GCS after {attempt+1} checks")  
-                break  
-            else:  
-                print(f"[DEBUG] File not found yet in GCS. Retrying {attempt+1}/{max_retries}")  
-                time.sleep(retry_delay)  
-        else:  
-            raise HTTPException(status_code=404, detail="Forecast file not yet available in GCS")
+        # 4. Wait until file exists in GCS before downloading (VM code has retry to check for file's presence in GCS)
+        # max_retries = 5  
+        # retry_delay = 2  
+        # for attempt in range(max_retries): 
+        #     if blob.exists(): 
+        #         print(f"[DEBUG] File found in GCS after {attempt+1} checks")  
+        #         break  
+        #     else:  
+        #         print(f"[DEBUG] File not found yet in GCS. Retrying {attempt+1}/{max_retries}")  
+        #         time.sleep(retry_delay)  
+        # else:  
+        #     raise HTTPException(status_code=404, detail="Forecast file not yet available in GCS")
           
          # 5. Stream directly from GCS (no /tmp download)
         print(f"[DEBUG] Streaming forecast file directly from GCS: {forecast_file_gcs}")
@@ -485,7 +490,7 @@ async def upload_zip(file: UploadFile = File(...)):
 
     forecast_status_store["status"] = "running"   # Update status
     forecast_status_store["forecast_gcs"] = None
-    forecast_status_store["webhook_time"] = None  # Reset webhook time
+    # forecast_status_store["webhook_time"] = None  # Reset webhook time
 
     try:
             print(f"[INFO] Saving uploaded file to temporary location")
@@ -623,55 +628,55 @@ async def health_check():
         "service": "featurebox-ai-backend"
     }
 
-@app.get("/whoami") 
-async def whoami():
-    """
-    Returns Cloud Run's service account and project ID.
-    Helps verify correct credentials before GCS calls.
-    """
-    try:
-        client = storage.Client()
-        project_id = client.project
-        try:
-            sa_email = client._credentials.service_account_email
-        except AttributeError:
-            sa_email = "Unable to detect (possibly default credentials)"
+# @app.get("/whoami") 
+# async def whoami():
+#     """
+#     Returns Cloud Run's service account and project ID.
+#     Helps verify correct credentials before GCS calls.
+#     """
+#     try:
+#         client = storage.Client()
+#         project_id = client.project
+#         try:
+#             sa_email = client._credentials.service_account_email
+#         except AttributeError:
+#             sa_email = "Unable to detect (possibly default credentials)"
         
-        return {
-            "project_id": project_id,
-            "service_account": sa_email,
-            "status": "ok"
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e)
-        }
+#         return {
+#             "project_id": project_id,
+#             "service_account": sa_email,
+#             "status": "ok"
+#         }
+#     except Exception as e:
+#         return {
+#             "status": "error",
+#             "error": str(e)
+#         }
 
-@app.get("/test-gcs")
-async def test_gcs():
-    """
-    Test GCS connectivity and permissions
-    """
-    try:
-        client = storage.Client()
-        bucket = client.bucket(BUCKET_NAME)
+# @app.get("/test-gcs")
+# async def test_gcs():
+#     """
+#     Test GCS connectivity and permissions
+#     """
+#     try:
+#         client = storage.Client()
+#         bucket = client.bucket(BUCKET_NAME)
         
-        # Test if we can list blobs (read permission)
-        blobs = list(bucket.list_blobs(max_results=1))
+#         # Test if we can list blobs (read permission)
+#         blobs = list(bucket.list_blobs(max_results=1))
         
-        return {
-            "status": "success",
-            "bucket": BUCKET_NAME,
-            "can_list_blobs": True,
-            "blob_count": len(blobs)
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e),
-            "bucket": BUCKET_NAME
-        }
+#         return {
+#             "status": "success",
+#             "bucket": BUCKET_NAME,
+#             "can_list_blobs": True,
+#             "blob_count": len(blobs)
+#         }
+#     except Exception as e:
+#         return {
+#             "status": "error",
+#             "error": str(e),
+#             "bucket": BUCKET_NAME
+#         }
 
 # @app.get("/test-vm")
 # async def test_vm():
