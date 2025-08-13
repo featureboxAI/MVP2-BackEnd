@@ -264,8 +264,8 @@ async def get_status():
                 #         print(f"[DEBUG] File still not found after retries, checking directory contents")
                 #         # List files in the directory to see what's actually there
                 #         try:
-                #             blobs = list(client.bucket(bucket_name).list_blobs(prefix="excel_uploads/", max_results=10))
-                #             print(f"[DEBUG] Recent files in excel_uploads/: {[b.name for b in blobs]}")
+                #             blobs = list(client.bucket(bucket_name).list_blobs(prefix="HP_uploads/", max_results=10))
+                #             print(f"[DEBUG] Recent files in HP_uploads/: {[b.name for b in blobs]}")
                 #         except Exception as list_err:
                 #             print(f"[DEBUG] Error listing directory: {list_err}")
                 #         forecast_status = "running"
@@ -366,7 +366,7 @@ def upload_to_gcs(file_path: str, bucket_name=BUCKET_NAME) -> str:
         bucket_name (str): GCS bucket name (default: BUCKET_NAME constant)
     
     Returns:
-        str: Relative path of uploaded file inside the bucket (e.g., excel_uploads/core.xlsx)
+        str: Relative path of uploaded file inside the bucket (e.g., HP_uploads/core.xlsx)
     """
     try:
         client = storage.Client()  # Create a GCS client using Cloud Run's service account credentials
@@ -632,8 +632,8 @@ async def get_forecast_history(limit: int = 3):
         client = storage.Client()
         bucket = client.bucket(BUCKET_NAME)
 
-        # List all blobs in the excel_uploads/ directory (where forecasts are stored)
-        blobs = list(bucket.list_blobs(prefix="excel_uploads/"))
+        # List all blobs in the HP_uploads/ directory (where forecasts are stored)
+        blobs = list(bucket.list_blobs(prefix="HP_uploads/"))
 
         forecast_files = []
 
@@ -692,7 +692,7 @@ async def download_forecast_file(blob_path: str):
     Download a specific forecast file from GCS by blob path
       
     Args:
-        blob_path: The blob path in GCS (e.g., "excel_uploads/forecast_2024_01_15.xlsx")
+        blob_path: The blob path in GCS (e.g., "HP_uploads/forecast_2024_01_15.xlsx")
       
     Returns:
         Streaming response with the file
