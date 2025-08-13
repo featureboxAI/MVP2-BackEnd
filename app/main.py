@@ -614,6 +614,120 @@ async def upload_zip(file: UploadFile = File(...)):
         except Exception as cleanup_error:
             print(f"[WARNING] Failed to cleanup temp dir: {cleanup_error}")
 
+# =========================================================
+# Forecast History endpoint - Get latest 3 forecast results by timestamp
+# =========================================================
+@app.get("/forecast-history")
+async def get_forecast_history(limit: int = 3):
+    """
+    Fetch the latest forecast results from GCS based on actual timestamp
+      
+    Args:
+        limit: Number of latest forecasts to return (default: 3)
+      
+    Returns:
+        JSON with list of latest forecast files sorted by timestamp
+    """
+    try:
+        client = storage.Client()
+        bucket = client.bucket(BUCKET_NAME)
+
+        # List all blobs in the excel_uploads/ directory (where forecasts are stored)
+        blobs = list(bucket.list_blobs(prefix="excel_uploads/"))
+
+        forecast_files = []
+
+        for blob in blobs:
+            # Filter only Excel files that look like forecast results
+            if blob.name.endswith('.xlsx') and 'forecast' in blob.name.lower():
+                try:
+                    # Get file metadata with proper timestamp
+                    file_info = {
+                        "filename": os.path.basename(blob.name),
+                        "gcs_path": f"gs://{BUCKET_NAME}/{blob.name}",
+                        "blob_path": blob.name,  # For download endpoint
+                        "timestamp": blob.time_created,  # Keep as datetime object for sorting
+                        "formatted_date": blob.time_created.strftime("%Y-%m-%d") if blob.time_created else "Unknown",
+                        "formatted_time": blob.time_created.strftime("%H:%M:%S") if blob.time_created else "Unknown",
+                        "status": "Completed"
+                    }
+
+                    forecast_files.append(file_info)
+
+                except Exception as file_err:
+                    print(f"[WARNING] Error processing file {blob.name}: {file_err}")
+                    continue
+
+        # Sort by actual timestamp (newest first) and limit results
+        forecast_files.sort(key=lambda x: x["timestamp"] if x["timestamp"] else datetime.min, reverse=True)
+        latest_forecasts = forecast_files[:limit]
+
+        # Convert timestamps to ISO format for JSON response
+        for forecast in latest_forecasts:
+            if forecast["timestamp"]:
+                forecast["timestamp"] = forecast["timestamp"].isoformat()
+
+        print(f"[DEBUG] Found {len(forecast_files)} total forecast files, returning latest {len(latest_forecasts)}")
+
+        return {
+            "status": "success",
+            "forecasts": latest_forecasts,
+            "total_found": len(forecast_files)
+        }
+
+    except Exception as e:
+        print(f"[ERROR] Failed to get forecast history: {e}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve forecast history: {str(e)}"
+        )
+
+# =========================================================
+# Download specific forecast file by blob path
+# =========================================================
+@app.get("/download-forecast-file")
+async def download_forecast_file(blob_path: str):
+    """
+    Download a specific forecast file from GCS by blob path
+      
+    Args:
+        blob_path: The blob path in GCS (e.g., "excel_uploads/forecast_2024_01_15.xlsx")
+      
+    Returns:
+        Streaming response with the file
+    """
+    try:
+        client = storage.Client()
+        bucket = client.bucket(BUCKET_NAME)
+        blob = bucket.blob(blob_path)
+
+        if not blob.exists():
+            raise HTTPException(status_code=404, detail="Forecast file not found")
+
+        # Stream the file directly from GCS
+        data = blob.download_as_bytes()
+        filename = os.path.basename(blob_path)
+
+        headers = {
+              "Content-Disposition": f"attachment; filename=\"{filename}\""
+          }
+
+        return StreamingResponse(
+            BytesIO(data),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers=headers
+        )
+
+    except Exception as e:
+        print(f"[ERROR] Failed to download forecast file: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to download file: {str(e)}"
+        )
+
+
+
 # DEBUG ENDPOINTS
 @app.get("/")
 async def root():
