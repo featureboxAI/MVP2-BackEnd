@@ -27,10 +27,36 @@ import time
 
 app = FastAPI()
 
+# Environment-based VM configuration
+ENVIRONMENT = os.getenv("ENVIRONMENT", "prod")  # test or prod
 PROJECT_ID = "fbfileuploads"                 
 ZONE = "us-central1-a"                          # VM zone
-INSTANCE_NAME = "instance-20250710-091502"      # VM Instance name
-STATIC_VM_IP = "34.135.50.176"
+
+# VM configuration based on environment
+if ENVIRONMENT == "test":
+    # Test environment - use test VM for both customers
+    INSTANCE_NAME = os.getenv("TEST_VM_INSTANCE", "test-vm-instance")
+    STATIC_VM_IP = os.getenv("TEST_VM_IP", "test-vm-ip")
+    print(f"[INFO] Running in TEST environment")
+    print(f"[INFO] Test VM Instance: {INSTANCE_NAME}")
+    print(f"[INFO] Test VM IP: {STATIC_VM_IP}")
+else:
+    # Production environment - use customer-specific VMs
+    CUSTOMER = os.getenv("CUSTOMER", "herb")  # herb or ladera
+    if CUSTOMER == "ladera":
+        INSTANCE_NAME = os.getenv("LADERA_VM_INSTANCE", "instance-20250710-091502")  # VM1
+        STATIC_VM_IP = os.getenv("LADERA_VM_IP", "34.135.50.176")  # VM1 IP
+        print(f"[INFO] Running in PRODUCTION environment for LADERA customer")
+    else:  # herb
+        INSTANCE_NAME = os.getenv("HERB_VM_INSTANCE", "herb-vm-instance")  # VM2
+        STATIC_VM_IP = os.getenv("HERB_VM_IP", "herb-vm-ip")  # VM2 IP  
+        print(f"[INFO] Running in PRODUCTION environment for HERB customer")
+    
+    print(f"[INFO] Prod VM Instance: {INSTANCE_NAME}")
+    print(f"[INFO] Prod VM IP: {STATIC_VM_IP}")
+
+print(f"[INFO] Environment: {ENVIRONMENT}")
+print(f"[INFO] Customer: {os.getenv('CUSTOMER', 'herb')}")
 
 def start_vm_if_needed(start_time=None):
     if start_time is None:
@@ -379,7 +405,12 @@ def upload_to_gcs(file_path: str, bucket_name=BUCKET_NAME) -> str:
     
         bucket = client.bucket(bucket_name)
         
-        blob_name = f"HP_uploads/{os.path.basename(file_path)}"
+        # Environment and customer-based folder structure
+        customer = os.getenv("CUSTOMER", "HP").upper()  # HP or LADERA
+        folder_path = f"{ENVIRONMENT}/{customer}_uploads"
+        blob_name = f"{folder_path}/{os.path.basename(file_path)}"
+        
+        print(f"[INFO] Uploading to GCS path: {blob_name}")
         blob = bucket.blob(blob_name)
         blob.upload_from_filename(file_path) #Upload the local file from Cloud Run's /tmp to the bucket location
 
@@ -632,8 +663,11 @@ async def get_forecast_history(limit: int = 3):
         client = storage.Client()
         bucket = client.bucket(BUCKET_NAME)
 
-        # List all blobs in the HP_uploads/ directory (where forecasts are stored)
-        blobs = list(bucket.list_blobs(prefix="HP_uploads/"))
+        # List all blobs in the customer's environment-specific directory
+        customer = os.getenv("CUSTOMER", "HP").upper()  # HP or LADERA
+        folder_path = f"{ENVIRONMENT}/{customer}_uploads"
+        print(f"[DEBUG] Searching for forecasts in: {folder_path}/")
+        blobs = list(bucket.list_blobs(prefix=f"{folder_path}/"))
 
         forecast_files = []
 
